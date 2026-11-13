@@ -1,0 +1,20 @@
+[project]
+name = "bob-agno-agent"
+version = "0.1.0"
+description = "Run a Bob agent as an Agno external agent, standalone or on AgentOS"
+requires-python = ">=3.10"
+dependencies = [
+    "agno[os]>=3.2.0",
+    "bob-agent-sdk>=0.1.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+bob-agent-sdk = { path = "..", editable = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]

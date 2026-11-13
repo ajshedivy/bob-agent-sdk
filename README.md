@@ -371,6 +371,10 @@ All errors extend `BobSDKError`.
 uv run examples/quick_start.py
 ```
 
+## Agno and AgentOS
+
+The [`agent`](agent/README.md) folder has `BobAgent`, an adapter that runs a Bob agent as an Agno external agent. Use it to call Bob through Agno's `run()` and `print_response()`, or to serve it with AgentOS.
+
 ## How it works
 
 The SDK starts `bob acp` and talks to it with the [Agent Client Protocol](https://agentclientprotocol.com) (ACP), through the official [ACP Python SDK](https://github.com/agentclientprotocol/python-sdk). ACP is the interface that editors use to drive an interactive Bob session. It supports several turns, tool approval and interrupts.
