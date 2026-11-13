@@ -42,8 +42,13 @@ Run it with `uv run --env-file .env my_agent.py`, where `.env` holds your `BOB_A
 The SDK uses a Bob API key. Create one in [Bobalytics](https://bob.ibm.com/docs/ide/features/bobalytics), then set it in the `BOB_API_KEY` environment variable:
 
 ```bash
-echo "BOB_API_KEY=your-key" > .env      # keep .env out of git
+# add to .env file (git ignored)
+echo "BOB_API_KEY=your-key" > .env
 uv run --env-file .env my_agent.py
+
+# export directly
+export BOB_API_KEY=your-key
+uv run my_agent.py
 ```
 
 To use the SSO login that `bob` already saved on your machine, set `BOB_USE_SSO=1` instead:
