@@ -37,9 +37,11 @@ uv add /path/to/bob-agent-sdk
 import asyncio
 from bob_agent_sdk import query
 
+
 async def main():
     async for message in query(prompt="What does this project do?"):
         print(message)
+
 
 asyncio.run(main())
 ```
@@ -121,7 +123,7 @@ async with BobSDKClient() as client:
 | `ToolResultMessage` | The outcome of one tool call: `status`, `output`, and raw `content` (file edits appear as diffs). |
 | `PlanMessage` | Bob's current todo list. |
 | `SystemMessage` | Session metadata. The first one has `subtype == "init"`. |
-| `ResultMessage` | The end of a turn: `stop_reason`, `result` (Bob's last text), `is_error`, `num_turns`, `cost`, `total_cost`, `model`, `session_id`, `duration_ms`, `num_tool_calls`. |
+| `ResultMessage` | The end of a turn: `stop_reason`, `result` (Bob's last text), `structured_output`, `is_error`, `num_turns`, `cost`, `total_cost`, `model`, `session_id`, `duration_ms`, `num_tool_calls`. |
 | `StreamEvent` | A raw update, such as a text delta. Only sent when `include_partial_messages=True`. |
 
 A `ToolUseBlock` has a `title` (for example the shell command) and a `kind` (`read`, `edit`, `execute`, ...). Its `name` (for example `execute_command`) is only set when hooks are on. See [Hooks](#hooks).
@@ -137,6 +139,7 @@ from bob_agent_sdk import BobAgentOptions, create_sdk_mcp_server, query, tool
 @tool("get_order_status", "Look up the status of an order", {"order_id": str})
 async def get_order_status(args):
     return ORDERS.get(args["order_id"], "unknown order")
+
 
 options = BobAgentOptions(
     mcp_servers={"shop": create_sdk_mcp_server("shop", tools=[get_order_status])},
@@ -168,10 +171,12 @@ Bob decides which tool calls need approval. Read-only tools, and everything allo
 ```python
 from bob_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
+
 async def can_use_tool(tool, context):
     if tool.kind == "execute" and "rm " in tool.input.get("command", ""):
         return PermissionResultDeny()
     return PermissionResultAllow()  # or PermissionResultAllow(always=True)
+
 
 options = BobAgentOptions(can_use_tool=can_use_tool)
 ```
@@ -290,6 +295,7 @@ A hook is an async Python function that Bob calls at a fixed point of its work. 
 ```python
 from bob_agent_sdk import BobAgentOptions, HookMatcher
 
+
 async def block_rm(event):
     if "rm " in event["tool_input"].get("command", ""):
         return {
@@ -299,6 +305,7 @@ async def block_rm(event):
                 "permissionDecisionReason": "Deleting files is not allowed.",
             }
         }
+
 
 options = BobAgentOptions(
     hooks={"PreToolUse": [HookMatcher(matcher="^execute_command$", hooks=[block_rm])]},
@@ -343,6 +350,50 @@ Every `ResultMessage` reports what the turn used:
 | `usage` | Bob's raw cost record, for example `contextTokens` |
 | `model` | The model that Bob used |
 
+## Typed output
+
+Set `output_format` to get the agent's answer as data. Pass a Pydantic model class, and the answer arrives as an instance of it:
+
+```python
+from typing import Literal
+from pydantic import BaseModel
+from bob_agent_sdk import BobAgentOptions, ResultMessage, query
+
+
+class Review(BaseModel):
+    verdict: Literal["approve", "request_changes"]
+    reasons: list[str]
+
+
+async for message in query(prompt="Review _http.py", options=BobAgentOptions(output_format=Review)):
+    if isinstance(message, ResultMessage):
+        review: Review = message.structured_output
+        print(review.verdict)
+```
+
+A JSON Schema works too, in the same form as the Claude Agent SDK. The answer is then plain data:
+
+```python
+options = BobAgentOptions(
+    output_format={"type": "json_schema", "schema": {"type": "object", "properties": {...}}},
+)
+```
+
+The SDK checks the answer against the schema:
+
+- **Invalid output is corrected.** Output that does not match goes back to the model with the reasons, and the model tries again.
+- **A missing answer is asked for.** The SDK reminds the agent up to two times. After that the run ends with `stop_reason == "error_max_structured_output_retries"` and `is_error=True`.
+- **`ResultMessage.result` still has Bob's last text.**
+
+How the agent reports the answer depends on its mode:
+
+| Mode | How the answer is reported |
+|---|---|
+| Has the `mcp` tool group (the built-in modes, or a `ModeDefinition` that lists it) | Through a `structured_output` tool that the SDK adds. Its input is your schema. It needs no `auto_approve` or `can_use_tool`. |
+| A `ModeDefinition` without `mcp`, for example `groups=["read"]` | As JSON at the end of the reply. The SDK reads it from the text. |
+
+The SDK does not add the `mcp` group for you. That group also gives the agent every MCP server that is configured in Bob, so a read-only reviewer stays read-only. The tool is the more reliable of the two ways. To use it without Bob's own MCP servers, list `mcp` and set `disable_mcp=True`.
+
 ## Options
 
 | Option | Purpose |
@@ -354,6 +405,7 @@ Every `ResultMessage` reports what the turn used:
 | `hooks` | Python callbacks for Bob's hook events. |
 | `isolation` | `shared`, `enforced` or `worktree`. See above. |
 | `max_turns`, `max_cost` | Limits. See above. |
+| `output_format` | A Pydantic model class or a JSON Schema for the answer. See above. |
 | `team_id` | Bob team, for accounts with more than one team. |
 | `mcp_servers` | In-process tools and external MCP servers. |
 | `can_use_tool`, `auto_approve` | Tool approval. See above. |
@@ -389,6 +441,7 @@ All errors extend `BobSDKError`.
 | [`examples/skills.py`](examples/skills.py) | Attaching a skill folder. |
 | [`examples/hooks.py`](examples/hooks.py) | Blocking and rewriting tool calls with hooks. |
 | [`examples/isolation.py`](examples/isolation.py) | Enforced and worktree isolation. |
+| [`examples/typed_output.py`](examples/typed_output.py) | The answer as a Pydantic model. |
 | [`examples/limits_and_usage.py`](examples/limits_and_usage.py) | Turn and cost limits, and usage numbers. |
 
 ```bash

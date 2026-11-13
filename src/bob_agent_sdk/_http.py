@@ -18,6 +18,7 @@ Handler = Callable[[Any], Awaitable[tuple[str, Any]]]
 
 # Tool results in hook payloads can be large.
 _MAX_BODY_BYTES = 64 * 1024 * 1024
+_MAX_HEADERS = 100
 
 
 class LoopbackServer:
@@ -56,6 +57,8 @@ class LoopbackServer:
                 while (line := await reader.readline()) not in (b"\r\n", b"\n", b""):
                     key, _, value = line.decode("latin-1").partition(":")
                     headers[key.strip().lower()] = value.strip()
+                    if len(headers) > _MAX_HEADERS:
+                        raise ValueError("too many headers")
                 # Check the token before reading the body, so that a caller
                 # without it cannot make this process buffer data.
                 authorized = secrets.compare_digest(

@@ -68,6 +68,7 @@ Then add what the task needs. Read the reference for a feature before using it:
 | To see, block or rewrite every tool call | `hooks` | [features.md](references/features.md#hooks) |
 | Helper agents | `agents={...}` | [features.md](references/features.md#subagents) |
 | Skill folders | `skills=[...]` | [features.md](references/features.md#skills) |
+| Its answer as data (a Pydantic model or JSON) | `output_format` | [features.md](references/features.md#typed-output) |
 | A turn or cost cap, or usage numbers | `max_turns`, `max_cost`, `ResultMessage` | [features.md](references/features.md#limits-and-usage) |
 | Follow-up prompts, interrupt, resume | `BobSDKClient` | [features.md](references/features.md#multi-turn-interrupt-resume) |
 | Several sessions at once | `isolation` | [features.md](references/features.md#isolation-between-sessions) |
@@ -79,6 +80,7 @@ The cloned repository has a runnable example for each feature in `~/.bob-agent-s
 ## 3. Rules that prevent common mistakes
 
 - **Decide tool approval on purpose.** Without `auto_approve=True` or `can_use_tool`, the SDK rejects every tool call that Bob asks approval for, and the agent appears unable to edit files, run commands or use your custom tools. For an unattended agent, set `auto_approve=True` and limit the tools with a `ModeDefinition`. Tell the user which one you chose.
+- **The `mcp` group is wider than your own tools.** It also gives the agent every MCP server configured in the user's Bob. Set `disable_mcp=True` when the agent should only have the tools you pass.
 - **Limit tools with tool groups.** There are no per-tool allow lists on the main agent. Use `ModeDefinition(groups=[...])`: `read`, `edit`, `execute`, `mcp`, `skill`, `todo`, `subagent`, `mode`. A read-only agent is `groups=["read"]`.
 - **`ToolUseBlock.name` is `None` unless hooks are on.** Use `block.title` and `block.kind` for display. Pass `hooks={}` when the code needs Bob's tool names.
 - **A call that a hook denies has no `ToolUseBlock`.** It shows only as a failed `ToolResultMessage`. To log every call, print inside a `PreToolUse` hook.

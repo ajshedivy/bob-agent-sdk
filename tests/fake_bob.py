@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 import acp
@@ -38,6 +39,20 @@ def run_hooks(cwd: str, event: str, fields: dict) -> dict:
     return output
 
 
+def call_mcp_tool(server, tool: str, arguments: dict) -> dict:
+    """Call a tool of an HTTP MCP server that the client registered, as Bob does."""
+    body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call"}
+    body["params"] = {"name": tool, "arguments": arguments}
+    headers = {header.name: header.value for header in server.headers}
+    request = urllib.request.Request(
+        server.url,
+        data=json.dumps(body).encode(),
+        headers={**headers, "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request) as response:
+        return json.loads(response.read())["result"]
+
+
 class FakeBob:
     def on_connect(self, conn):
         self.conn = conn
@@ -46,6 +61,9 @@ class FakeBob:
         self.cwd = ""
         self.cost = 0.0
         self.scoped_calls = 0
+        self.servers = {}
+        self.forgotten = None
+        self.replies = []
         self.saved = []  # Assistant messages, as Bob's task store would hold them.
 
     def spend(self):
@@ -88,6 +106,7 @@ class FakeBob:
             raise acp.RequestError.auth_required()
         bob_dir = Path(cwd) / ".bob"
         self.cwd = cwd
+        self.servers = {server.name: server for server in mcp_servers or []}
         self.session = {
             "cwd": cwd,
             "mode": kwargs.get("bob/mode"),
@@ -125,7 +144,63 @@ class FakeBob:
                 schema.AgentMessageChunk(session_update="agent_message_chunk", content=text(value))
             )
 
-        if command == "touch":
+        if command.startswith("text:"):
+            # Reply with text only. "text:<first>|<second>" gives the second reply
+            # when the client asks again.
+            self.replies = command.removeprefix("text:").split("|")
+        if self.replies and (command.startswith("text:") or command.startswith("Your ")):
+            self.save_request()
+            await say(self.replies.pop(0))
+            return schema.PromptResponse(stop_reason="end_turn")
+        if command.startswith("forget:"):
+            # End the turn without reporting the output. Report it when reminded.
+            self.forgotten = command.removeprefix("forget:")
+            await say("here is my answer as text")
+            return schema.PromptResponse(stop_reason="end_turn")
+        if command.startswith("You ended your turn") and self.forgotten:
+            command, self.forgotten = f"output:{self.forgotten}", None
+        if command.startswith("output:"):
+            # Report typed output. "output:<bad json>|<good json>" tries the bad one first.
+            for number, attempt in enumerate(command.removeprefix("output:").split("|")):
+                tool_id = f"o{number}"
+                call = dict(tool_call_id=tool_id, title="Running Structured Output (sdk_output)")
+                await send(
+                    schema.ToolCallStart(session_update="tool_call", status="pending", **call)
+                )
+                answer = await self.conn.request_permission(
+                    session_id=session_id,
+                    tool_call=schema.ToolCallUpdate(**call),
+                    options=[
+                        schema.PermissionOption(option_id="allow", name="Allow", kind="allow_once"),
+                        schema.PermissionOption(
+                            option_id="reject", name="Reject", kind="reject_once"
+                        ),
+                    ],
+                )
+                if getattr(answer.outcome, "option_id", None) != "allow":
+                    await say("the output tool was rejected")
+                    break
+                result = await asyncio.to_thread(
+                    call_mcp_tool,
+                    self.servers["sdk_output"],
+                    "structured_output",
+                    json.loads(attempt),
+                )
+                await send(
+                    schema.ToolCallProgress(
+                        session_update="tool_call_update",
+                        tool_call_id=tool_id,
+                        status="failed" if result.get("isError") else "completed",
+                        content=[
+                            schema.ContentToolCallContent(
+                                type="content", content=text(result["content"][0]["text"])
+                            )
+                        ],
+                    )
+                )
+                if not result.get("isError"):
+                    break
+        elif command == "touch":
             (Path(self.cwd) / "made.txt").write_text("made by the agent")
             await say("touched")
         elif command.partition(":")[0] in SCOPED:

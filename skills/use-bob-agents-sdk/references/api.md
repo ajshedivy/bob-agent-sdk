@@ -37,6 +37,7 @@ async with BobSDKClient(options) as client:  # several turns, one session
 | `skills` | list of paths | Skill folders (each with `SKILL.md`) to attach |
 | `hooks` | dict or `None` | Python callbacks for Bob's hook events. Any non-`None` value, also `{}`, turns hooks on |
 | `isolation` | `"shared"` | `shared`, `enforced` or `worktree` |
+| `output_format` | `None` | A Pydantic model class, or `{"type": "json_schema", "schema": {...}}`. The answer is in `ResultMessage.structured_output` |
 | `max_turns` | `None` | Stop a `query()` after this many model requests |
 | `max_cost` | `None` | Stop when the session has spent this many Bobcoins |
 | `resume` | `None` | Session ID of an earlier session to continue |
@@ -59,9 +60,9 @@ Check the type with `isinstance`.
 | `PlanMessage` | `entries`: list of `PlanEntry(content, status, priority)`. Each update replaces the last |
 | `SystemMessage` | `subtype`, `data`. The first has `subtype == "init"` and `data["session_id"]`, `data["cwd"]`, `data["worktree"]` |
 | `StreamEvent` | `event`: raw update dict. Text deltas have `event["sessionUpdate"] == "agent_message_chunk"` and `event["content"]["text"]` |
-| `ResultMessage` | `stop_reason`, `is_error`, `result` (Bob's last text), `num_turns` (model requests in this `query()`), `cost` (this `query()`), `total_cost` (whole session), `usage`, `model`, `session_id`, `duration_ms`, `num_tool_calls`. Costs are in Bobcoins |
+| `ResultMessage` | `stop_reason`, `is_error`, `result` (Bob's last text), `structured_output` (the typed answer, or `None`), `num_turns` (model requests in this `query()`), `cost` (this `query()`), `total_cost` (whole session), `usage`, `model`, `session_id`, `duration_ms`, `num_tool_calls`. Costs are in Bobcoins |
 
-`stop_reason` values: `end_turn`, `cancelled` (after `interrupt()`), `max_turns`, `max_cost`, and Bob's own `max_tokens`, `max_turn_requests`, `refusal`. `is_error` is true for everything except `end_turn` and `cancelled`.
+`stop_reason` values: `end_turn`, `cancelled` (after `interrupt()`), `max_turns`, `max_cost`, `error_max_structured_output_retries`, and Bob's own `max_tokens`, `max_turn_requests`, `refusal`. `is_error` is true for everything except `end_turn` and `cancelled`.
 
 ## BobSDKClient
 

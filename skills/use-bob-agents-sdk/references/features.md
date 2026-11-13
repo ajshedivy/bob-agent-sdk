@@ -10,6 +10,7 @@ Short, working patterns for each feature. All names are imported from `bob_agent
 - [Subagents](#subagents)
 - [Skills](#skills)
 - [Hooks](#hooks)
+- [Typed output](#typed-output)
 - [Limits and usage](#limits-and-usage)
 - [Multi-turn, interrupt, resume](#multi-turn-interrupt-resume)
 - [Isolation between sessions](#isolation-between-sessions)
@@ -158,6 +159,28 @@ What a denied call looks like:
 - The tool does not run. The model receives the reason and continues.
 - The stream has no `ToolUseBlock` for it, only a `ToolResultMessage` with `status == "failed"` and the reason in `output`.
 - So to log every call, including denied ones, print inside a `PreToolUse` hook. Do not rely on `ToolUseBlock` alone.
+
+## Typed output
+
+Use it whenever code reads the agent's answer. Do not parse JSON out of the text.
+
+```python
+class Review(BaseModel):  # from pydantic
+    verdict: Literal["approve", "request_changes"]
+    reasons: list[str]
+
+
+async for message in query(prompt="Review app.py", options=BobAgentOptions(output_format=Review)):
+    if isinstance(message, ResultMessage):
+        review: Review = message.structured_output  # a Review instance
+```
+
+- `output_format` is a Pydantic model class (the answer is an instance) or `{"type": "json_schema", "schema": {...}}` (the answer is plain data).
+- The SDK validates the answer. The model must correct output that does not match, so constraints in the model (`Field(ge=1)`, `Literal[...]`, `max_length`) are enforced.
+- If the agent never reports, the run ends with `stop_reason == "error_max_structured_output_retries"` and `structured_output` is `None`. Check `is_error` before reading it.
+- It works with every mode and needs no `auto_approve`. A mode with the `mcp` tool group reports through a tool that the SDK adds. A mode without it, such as `groups=["read"]`, reports as JSON at the end of its reply, and the SDK reads it.
+- Do not add `mcp` to a mode only for typed output. The `mcp` group also gives the agent every MCP server that is configured in Bob. If the agent needs `mcp` for your own tools, set `disable_mcp=True` to keep Bob's configured servers out.
+- With `BobSDKClient`, every `query()` gets its own output.
 
 ## Limits and usage
 

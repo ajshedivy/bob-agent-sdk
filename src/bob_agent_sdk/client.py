@@ -28,6 +28,7 @@ from ._errors import (
 from ._hooks import TOKEN_ENV, URL_ENV, HookDispatcher, scope_guard
 from ._http import LoopbackServer
 from ._messages import MessageAssembler, to_dict, tool_use_block
+from ._output import BOB_TOOL_NAME, SERVER_KEY, OutputCollector
 from ._usage import UsageSnapshot, parse_export
 from ._version import __version__
 from ._workspace import WorkspaceFiles
@@ -53,6 +54,8 @@ _LINE_LIMIT = 64 * 1024 * 1024
 # Bob's own subagents. A mode with a list of allowed subagents must name them
 # to keep them, so `isolation="enforced"` adds them to the list it builds.
 _BUILT_IN_SUBAGENTS = ("general", "explore")
+# How often the SDK reminds the model to report its typed output.
+_OUTPUT_REMINDERS = 2
 # Set to 1 to use Bob's saved SSO login instead of an API key.
 USE_SSO_ENV = "BOB_USE_SSO"
 _END = object()
@@ -89,6 +92,7 @@ class BobSDKClient:
         self._server: LoopbackServer | None = None
         self._mode: str | None = None
         self._tool_names: dict[str, str] = {}  # Tool call ID to Bob tool name.
+        self._output: OutputCollector | None = None  # Set when the session has an output format.
         # Usage. Bob reports totals for the session, so the SDK keeps baselines.
         self._usage_supported = False
         self._cost_at_connect = 0.0
@@ -137,6 +141,16 @@ class BobSDKClient:
                 hooks["PreToolUse"] = [guard, *hooks.get("PreToolUse", [])]
 
             mode = opts.mode
+            if opts.output_format is not None:
+                # A mode without the `mcp` tool group cannot call the output tool.
+                # Do not add the group: it would also open Bob's own MCP servers
+                # to the agent. Such an agent gives its answer as JSON text.
+                use_tool = not isinstance(mode, ModeDefinition) or "mcp" in mode.groups
+                self._output = OutputCollector(opts.output_format, use_tool=use_tool)
+                if use_tool and SERVER_KEY in opts.mcp_servers:
+                    raise BobSDKError(
+                        f"The MCP server name {SERVER_KEY!r} is used by output_format."
+                    )
             if isinstance(mode, ModeDefinition):
                 if enforced and mode.allowed_subagents is None:
                     # With a list, Bob does not show the other subagents to the
@@ -361,7 +375,10 @@ class BobSDKClient:
     async def _mcp_servers(self) -> list[Any]:
         """Convert `options.mcp_servers` to ACP models. Mounts in-process tool servers."""
         servers: list[Any] = []
-        for index, (name, config) in enumerate(self.options.mcp_servers.items()):
+        configs: dict[str, Any] = dict(self.options.mcp_servers)
+        if self._output is not None and self._output.uses_tool:
+            configs[SERVER_KEY] = self._output.server()
+        for index, (name, config) in enumerate(configs.items()):
             if isinstance(config, SdkMcpServer):
                 server = await self._loopback_server()
                 path = f"/mcp/{index}"
@@ -416,12 +433,34 @@ class BobSDKClient:
                 # The budget is already used up. Do not start another turn.
                 stop_reason = "max_cost"
             else:
-                response = await conn.prompt(session_id=self.session_id, prompt=blocks)
-                if self._limit_task is not None:
-                    await self._limit_task
-                stop_reason = response.stop_reason
-                if stop_reason == "cancelled" and self._limit_hit:
-                    stop_reason = self._limit_hit
+                if self._output is not None:
+                    self._output.reset()
+                    instruction = schema.TextContentBlock(
+                        type="text", text=self._output.instruction
+                    )
+                    blocks = [*blocks, instruction]
+                reminders = 0
+                while True:
+                    response = await conn.prompt(session_id=self.session_id, prompt=blocks)
+                    if self._limit_task is not None:
+                        await self._limit_task
+                    stop_reason = response.stop_reason
+                    if stop_reason == "cancelled" and self._limit_hit:
+                        stop_reason = self._limit_hit
+                    if self._output is None or stop_reason != "end_turn":
+                        break
+                    # Close this reply, so that the next one is a message of its own.
+                    for message in self._assembler.flush():
+                        self._queue.put_nowait(message)
+                    reminder = self._output.reminder(self._assembler.last_text())
+                    if reminder is None:
+                        break
+                    # The model did not report its output, or reported one that is not valid.
+                    if reminders == _OUTPUT_REMINDERS:
+                        stop_reason = "error_max_structured_output_retries"
+                        break
+                    reminders += 1
+                    blocks = [schema.TextContentBlock(type="text", text=reminder)]
             usage: dict[str, Any] = {}
             if snapshot := await self._usage():
                 usage = {
@@ -433,6 +472,8 @@ class BobSDKClient:
                 }
                 self._cost_before_turn = snapshot.total_cost
                 self._requests_before_turn = snapshot.model_requests
+            if self._output is not None and self._output.has_value:
+                usage["structured_output"] = self._output.value
             duration_ms = int((time.monotonic() - started) * 1000)
             messages = self._assembler.finish(stop_reason, duration_ms, **usage)
         except ConnectionError:
@@ -509,7 +550,10 @@ class BobSDKClient:
     ) -> schema.RequestPermissionResponse:
         allow = False
         always = False
-        if self.options.can_use_tool is not None:
+        if self._is_output_tool(tool_call):
+            # The SDK's own tool only records the answer. It must not need approval.
+            allow = True
+        elif self.options.can_use_tool is not None:
             call = asyncio.ensure_future(
                 self.options.can_use_tool(
                     tool_use_block(tool_call, self._tool_names.get(tool_call.tool_call_id)),
@@ -545,6 +589,15 @@ class BobSDKClient:
                         )
                     )
         return _CANCELLED
+
+    def _is_output_tool(self, tool_call: Any) -> bool:
+        if self._output is None or not self._output.uses_tool:
+            return False
+        name = self._tool_names.get(tool_call.tool_call_id)
+        if name is not None:
+            return name == BOB_TOOL_NAME
+        # Without hooks Bob gives no tool name, only a title that ends with the server key.
+        return (tool_call.title or "").endswith(f"({SERVER_KEY})")
 
     async def _read_stderr(self) -> None:
         # The pipe must be drained, or Bob blocks when it fills up.

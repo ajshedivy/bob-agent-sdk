@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, Union
 
+from pydantic import BaseModel
+
 if TYPE_CHECKING:
     from .tools import SdkMcpServer
 
@@ -107,7 +109,8 @@ class ResultMessage:
     session_id: str
     stop_reason: str
     """`end_turn`, `cancelled`, `max_tokens`, `max_turn_requests` or `refusal` from
-    Bob, or `max_turns` / `max_cost` when a limit from `BobAgentOptions` stopped the turn."""
+    Bob. `max_turns` or `max_cost` when a limit from `BobAgentOptions` stopped the turn.
+    `error_max_structured_output_retries` when the agent never reported its typed output."""
     duration_ms: int
     num_tool_calls: int
     result: str | None
@@ -123,6 +126,9 @@ class ResultMessage:
     usage: dict[str, Any] | None = None
     """Bob's raw cost record for the session, for example `contextTokens`."""
     model: str | None = None
+    structured_output: Any = None
+    """The agent's answer in the form that `BobAgentOptions.output_format` asked
+    for: an instance of the Pydantic model, or data that matches the JSON Schema."""
 
 
 Message = (
@@ -272,6 +278,11 @@ class BobAgentOptions:
     hooks: dict[HookEvent, list[HookMatcher]] | None = None
     """Python callbacks for Bob's hook events. Any value other than None, also
     `{}`, turns hooks on and so makes `ToolUseBlock.name` available."""
+    output_format: dict[str, Any] | type[BaseModel] | None = None
+    """Make the agent answer with data, not only text. Pass a Pydantic model class,
+    or `{"type": "json_schema", "schema": {...}}`. The answer is in
+    `ResultMessage.structured_output`. The agent reports it through a tool when its
+    mode has the `mcp` tool group, and as JSON text otherwise."""
     max_turns: int | None = None
     """Stop a turn after this number of model requests."""
     max_cost: float | None = None
