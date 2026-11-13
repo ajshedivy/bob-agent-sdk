@@ -4,33 +4,18 @@ A Python SDK for building custom agents on [IBM Bob Shell](https://bob.ibm.com/d
 
 ## Contents
 
-- [Requirements](#requirements)
-- [Skill for coding agents](#skill-for-coding-agents)
 - [Install](#install)
 - [Quick start](#quick-start)
 - [Login](#login)
 - [One prompt: `query()`](#one-prompt-query)
 - [A conversation: `BobSDKClient`](#a-conversation-bobsdkclient)
-- [Messages](#messages)
 - [Custom tools](#custom-tools)
-- [Tool approval](#tool-approval)
-- [A custom agent: role, instructions and tools](#a-custom-agent-role-instructions-and-tools)
-- [Subagents](#subagents)
-- [Skills](#skills)
-- [Isolation between sessions](#isolation-between-sessions)
-  - [`isolation="enforced"`](#isolationenforced)
-  - [`isolation="worktree"`](#isolationworktree)
 - [Hooks](#hooks)
-- [Limits and usage](#limits-and-usage)
 - [Typed output](#typed-output)
+- [Isolation between sessions](#isolation-between-sessions)
 - [Options](#options)
-- [Errors](#errors)
 - [Examples](#examples)
-- [Agno and AgentOS](#agno-and-agentos)
 - [How it works](#how-it-works)
-  - [Files in your workspace](#files-in-your-workspace)
-- [Limits](#limits)
-- [Development](#development)
 
 ## Requirements
 
