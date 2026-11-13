@@ -10,6 +10,13 @@ from bob_agent_sdk import BobAgentOptions, query
 FAKE_BOB = Path(__file__).parent / "fake_bob.py"
 
 
+@pytest.fixture(autouse=True)
+def login(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test starts with an API key and without the SSO opt-in."""
+    monkeypatch.setenv("BOB_API_KEY", "test-key")
+    monkeypatch.delenv("BOB_USE_SSO", raising=False)
+
+
 @pytest.fixture
 def cli(tmp_path: Path) -> Path:
     """An executable named `bob` that runs the stand-in agent."""

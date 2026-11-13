@@ -4,7 +4,7 @@ Bob only asks for approval when its own settings do not already allow the
 call. Read-only tools, and anything listed under `approval` in
 ~/.bob/settings/settings.json, run without calling the callback.
 
-    uv run examples/tool_permission_callback.py
+    uv run --env-file .env examples/tool_permission_callback.py
 """
 
 import asyncio

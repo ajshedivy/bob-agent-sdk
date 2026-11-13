@@ -4,7 +4,7 @@ The SDK creates a custom Bob mode for the session. Its role and instructions
 go into Bob's system prompt. Tool groups that are left out are not available
 to the agent.
 
-    uv run examples/custom_agent.py
+    uv run --env-file .env examples/custom_agent.py
 """
 
 import asyncio

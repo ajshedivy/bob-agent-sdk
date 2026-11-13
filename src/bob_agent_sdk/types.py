@@ -289,7 +289,9 @@ class BobAgentOptions:
     include_partial_messages: bool = False
     """Also yield a `StreamEvent` for every raw update (text deltas, tool progress)."""
     api_key: str | None = None
-    """Bob API key. Defaults to `BOB_API_KEY`; without either, Bob uses its saved SSO login."""
+    """Bob API key. Defaults to the `BOB_API_KEY` environment variable. Without a
+    key the session does not start, unless `BOB_USE_SSO=1` is set: then
+    Bob uses its saved SSO login."""
     trust: bool = False
     """Save the workspace as trusted."""
     accept_license: bool = False

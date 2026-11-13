@@ -6,9 +6,9 @@ A Python SDK for building custom agents on [IBM Bob Shell](https://bob.ibm.com/d
 
 - Python 3.10 or later, managed with [uv](https://docs.astral.sh/uv/)
 - Bob Shell 2.1 or later on your `PATH` (check with `bob --version`)
-- A Bob login. Use one of these:
-  - **SSO:** run `bob` once and log in. The SDK reuses the saved login.
-  - **API key:** set `BOB_API_KEY`, or pass `BobAgentOptions(api_key=...)`.
+- A Bob API key in the `BOB_API_KEY` environment variable
+
+The SDK needs an API key by default. To use the SSO login that `bob` saved on your machine instead, set `BOB_USE_SSO=1`. See [Login](#login).
 
 ## Install
 
@@ -37,7 +37,20 @@ async def main():
 asyncio.run(main())
 ```
 
-Run it with `uv run my_agent.py`.
+Run it with `uv run --env-file .env my_agent.py`, where `.env` holds your `BOB_API_KEY`.
+
+## Login
+
+| What you set | Login that Bob uses |
+|---|---|
+| `BobAgentOptions(api_key=...)` | That key |
+| `BOB_USE_SSO=1` | The SSO login that `bob` saved on this machine. Run `bob` once to log in. |
+| `BOB_API_KEY` | That key |
+| None of these | The session does not start. The SDK raises `AuthenticationError`. |
+
+The first row that applies wins. An API key is the default because an SSO login needs a browser on the machine where Bob runs, and a server has none.
+
+Keep the key out of your code. Put `BOB_API_KEY=...` in a `.env` file that git ignores, and pass it with `uv run --env-file .env`.
 
 ## One prompt: `query()`
 
@@ -335,7 +348,7 @@ Every `ResultMessage` reports what the turn used:
 | `can_use_tool`, `auto_approve` | Tool approval. See above. |
 | `resume` | Session ID of an earlier session to continue. |
 | `include_partial_messages` | Also yield a `StreamEvent` for each raw update. |
-| `api_key` | Bob API key. Default: the `BOB_API_KEY` environment variable. |
+| `api_key` | Bob API key. Default: the `BOB_API_KEY` environment variable. See [Login](#login). |
 | `trust`, `accept_license` | Pass `--trust` or `--accept-license` to Bob. |
 | `disable_mcp`, `disable_subagents` | Turn off Bob's own MCP servers or subagents. |
 | `cli_path`, `env`, `log_level`, `stderr` | Control the Bob process. |
@@ -347,7 +360,7 @@ All errors extend `BobSDKError`.
 | Error | Cause |
 |---|---|
 | `CLINotFoundError` | `bob` is not on `PATH`. |
-| `AuthenticationError` | Bob has no valid login. Run `bob` to log in, or set an API key. |
+| `AuthenticationError` | There is no API key, or Bob did not accept the login. |
 | `ACPError` | Bob rejected a request. The message says why. |
 | `ProcessError` | Bob exited unexpectedly. See `exit_code` and `stderr`. |
 
@@ -368,7 +381,7 @@ All errors extend `BobSDKError`.
 | [`examples/limits_and_usage.py`](examples/limits_and_usage.py) | Turn and cost limits, and usage numbers. |
 
 ```bash
-uv run examples/quick_start.py
+uv run --env-file .env examples/quick_start.py
 ```
 
 ## Agno and AgentOS

@@ -43,10 +43,11 @@ class ACPError(BobSDKError):
         super().__init__(f"{message} (code {code})")
 
     @classmethod
-    def from_request_error(cls, error: RequestError) -> ACPError:
-        kind = AuthenticationError if error.code == _AUTH_REQUIRED else ACPError
-        return kind(error.code, str(error), error.data)
+    def from_request_error(cls, error: RequestError) -> BobSDKError:
+        if error.code == _AUTH_REQUIRED:
+            return AuthenticationError(f"Bob rejected the login: {error}")
+        return ACPError(error.code, str(error), error.data)
 
 
-class AuthenticationError(ACPError):
-    """Bob has no valid login. Run `bob` once to log in, or set BOB_API_KEY."""
+class AuthenticationError(BobSDKError):
+    """There is no Bob API key, or Bob did not accept the login."""

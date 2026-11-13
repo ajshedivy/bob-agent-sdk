@@ -6,7 +6,7 @@ It is built on `bob_agent_sdk` and on Agno's `BaseExternalAgent`, the same base 
 
 ## Requirements
 
-- Everything that [`bob_agent_sdk`](../README.md#requirements) needs: Bob Shell on your `PATH` and a Bob login
+- Everything that [`bob_agent_sdk`](../README.md#requirements) needs: Bob Shell on your `PATH`, and a Bob API key in `BOB_API_KEY`
 - Agno 3.2 or later (installed by `uv sync`)
 
 ## Install
@@ -111,9 +111,11 @@ This uses Agno's support for approval requests of external agents, the same that
 | [`agentos.py`](agentos.py) | A code reviewer served by AgentOS that asks before it runs a command, with `curl` commands. |
 
 ```bash
-uv run basic.py
-uv run agentos.py
+uv run --env-file ../.env basic.py
+uv run --env-file ../.env agentos.py
 ```
+
+`../.env` holds your `BOB_API_KEY`. To use Bob's saved SSO login instead, set `BOB_USE_SSO=1`. See [Login](../README.md#login).
 
 ## Tests
 

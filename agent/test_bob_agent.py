@@ -22,6 +22,12 @@ from bob_agent import BobAgent
 FAKE_BOB = Path(__file__).parent.parent / "tests" / "fake_bob.py"
 
 
+@pytest.fixture(autouse=True)
+def login(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The SDK needs an API key by default. The stand-in accepts any."""
+    monkeypatch.setenv("BOB_API_KEY", "test-key")
+
+
 @pytest.fixture
 def agent(tmp_path: Path) -> BobAgent:
     cli = tmp_path / "bob"

@@ -4,7 +4,7 @@ Hooks see every tool call with its real tool name, also the calls that Bob
 approves on its own. A hook can block a call, change its input, or add context
 for the model.
 
-    uv run examples/hooks.py
+    uv run --env-file .env examples/hooks.py
 """
 
 import asyncio

@@ -171,6 +171,38 @@ def test_auth_required_raises_authentication_error(cli: Path) -> None:
         asyncio.run(collect("echo", BobAgentOptions(cli_path=cli, api_key="bad-key")))
 
 
+def echoed_key(cli: Path, **options) -> str | None:
+    """The API key that the Bob process received."""
+    result = asyncio.run(collect("echo", BobAgentOptions(cli_path=cli, **options)))[-1]
+    return json.loads(result.result)["api_key"]
+
+
+def test_login_uses_the_api_key_from_the_environment(cli: Path) -> None:
+    assert echoed_key(cli) == "test-key"
+    assert echoed_key(cli, api_key="from-options") == "from-options"
+    assert echoed_key(cli, env={"BOB_API_KEY": "from-env-option"}) == "from-env-option"
+
+
+def test_no_api_key_stops_before_bob_starts(
+    cli: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("BOB_API_KEY")
+    # The path does not exist: the error must come before the SDK tries to start Bob.
+    options = BobAgentOptions(cli_path=tmp_path / "missing")
+    with pytest.raises(AuthenticationError, match="BOB_USE_SSO=1"):
+        asyncio.run(collect("echo", options))
+
+
+def test_sso_is_used_only_when_asked_for(cli: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOB_USE_SSO", "1")
+    # Bob must not see the key from the environment, or it would use it.
+    assert echoed_key(cli) is None
+    monkeypatch.delenv("BOB_API_KEY")
+    assert echoed_key(cli) is None
+    # A key passed in code is a clear choice, so it still wins.
+    assert echoed_key(cli, api_key="from-options") == "from-options"
+
+
 def test_missing_cli_raises_cli_not_found(tmp_path: Path) -> None:
     with pytest.raises(CLINotFoundError):
         asyncio.run(collect("echo", BobAgentOptions(cli_path=tmp_path / "missing")))

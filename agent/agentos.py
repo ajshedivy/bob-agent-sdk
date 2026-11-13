@@ -8,7 +8,7 @@ command that is not already approved in your Bob settings, the run pauses and
 the AgentOS chat asks you to confirm or reject it.
 
     cd agent
-    uv run agentos.py
+    uv run --env-file ../.env agentos.py
 
 Then call the API:
 

@@ -4,7 +4,7 @@ A skill is a folder with a `SKILL.md` file, and any files that the skill
 refers to. Bob reads the skill's description, and loads the full instructions
 when a request matches it.
 
-    uv run examples/skills.py
+    uv run --env-file .env examples/skills.py
 """
 
 import asyncio

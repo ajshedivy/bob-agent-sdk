@@ -19,6 +19,7 @@ from acp.client.connection import ClientSideConnection
 
 from ._errors import (
     ACPError,
+    AuthenticationError,
     BobSDKError,
     CLIConnectionError,
     CLINotFoundError,
@@ -52,6 +53,8 @@ _LINE_LIMIT = 64 * 1024 * 1024
 # Bob's own subagents. A mode with a list of allowed subagents must name them
 # to keep them, so `isolation="enforced"` adds them to the list it builds.
 _BUILT_IN_SUBAGENTS = ("general", "explore")
+# Set to 1 to use Bob's saved SSO login instead of an API key.
+USE_SSO_ENV = "BOB_USE_SSO"
 _END = object()
 _CANCELLED = schema.RequestPermissionResponse(outcome=schema.DeniedOutcome(outcome="cancelled"))
 
@@ -108,9 +111,7 @@ class BobSDKClient:
             return
         opts = self.options
         cwd = str(Path(opts.cwd or os.getcwd()).resolve())
-        env = {**os.environ, **opts.env}
-        if opts.api_key:
-            env["BOB_API_KEY"] = opts.api_key
+        env = self._environment()
         command = self._command()
 
         try:
@@ -306,6 +307,27 @@ class BobSDKClient:
         if self._conn is None or self.session_id is None:
             raise CLIConnectionError("Not connected. Call connect() first.")
         return self._conn, self.session_id
+
+    def _environment(self) -> dict[str, str]:
+        """The environment of the Bob process, with the login it must use.
+
+        Bob uses `BOB_API_KEY` when it is set, and its saved SSO login otherwise.
+        The SDK requires a key unless SSO is asked for, because an SSO login
+        needs a browser on this machine, which a server does not have.
+        """
+        opts = self.options
+        env = {**os.environ, **opts.env}
+        if opts.api_key:
+            env["BOB_API_KEY"] = opts.api_key
+        elif env.get(USE_SSO_ENV, "").strip().lower() in ("1", "true", "yes"):
+            env.pop("BOB_API_KEY", None)  # Else Bob would use the key and not the SSO login.
+        elif not env.get("BOB_API_KEY"):
+            raise AuthenticationError(
+                "No Bob API key. Set the BOB_API_KEY environment variable or pass "
+                "BobAgentOptions(api_key=...). To use Bob's saved SSO login instead, "
+                f"set {USE_SSO_ENV}=1."
+            )
+        return env
 
     def _command(self) -> list[str]:
         opts = self.options
