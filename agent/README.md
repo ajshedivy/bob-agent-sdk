@@ -115,7 +115,7 @@ uv run --env-file ../.env basic.py
 uv run --env-file ../.env agentos.py
 ```
 
-`../.env` holds your `BOB_API_KEY`. To use Bob's saved SSO login instead, set `BOB_USE_SSO=1`. See [Login](../README.md#login).
+`../.env` holds your `BOB_API_KEY`. See [Login](../README.md#login).
 
 ## Tests
 

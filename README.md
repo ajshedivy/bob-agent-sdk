@@ -6,9 +6,7 @@ A Python SDK for building custom agents on [IBM Bob Shell](https://bob.ibm.com/d
 
 - Python 3.10 or later, managed with [uv](https://docs.astral.sh/uv/)
 - Bob Shell 2.1 or later on your `PATH` (check with `bob --version`)
-- A Bob API key in the `BOB_API_KEY` environment variable
-
-The SDK needs an API key by default. To use the SSO login that `bob` saved on your machine instead, set `BOB_USE_SSO=1`. See [Login](#login).
+- A Bob API key. See [Login](#login).
 
 ## Install
 
@@ -41,16 +39,20 @@ Run it with `uv run --env-file .env my_agent.py`, where `.env` holds your `BOB_A
 
 ## Login
 
-| What you set | Login that Bob uses |
-|---|---|
-| `BobAgentOptions(api_key=...)` | That key |
-| `BOB_USE_SSO=1` | The SSO login that `bob` saved on this machine. Run `bob` once to log in. |
-| `BOB_API_KEY` | That key |
-| None of these | The session does not start. The SDK raises `AuthenticationError`. |
+The SDK uses a Bob API key. Set it in the `BOB_API_KEY` environment variable:
 
-The first row that applies wins. An API key is the default because an SSO login needs a browser on the machine where Bob runs, and a server has none.
+```bash
+echo "BOB_API_KEY=your-key" > .env      # keep .env out of git
+uv run --env-file .env my_agent.py
+```
 
-Keep the key out of your code. Put `BOB_API_KEY=...` in a `.env` file that git ignores, and pass it with `uv run --env-file .env`.
+To use the SSO login that `bob` already saved on your machine, set `BOB_USE_SSO=1` instead:
+
+```bash
+BOB_USE_SSO=1 uv run my_agent.py
+```
+
+Without either, the SDK raises `AuthenticationError`.
 
 ## One prompt: `query()`
 
