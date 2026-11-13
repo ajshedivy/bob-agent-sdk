@@ -6,9 +6,9 @@ uv run basic.py
 
 import tempfile
 
-from bob_agent_sdk import ModeDefinition, create_sdk_mcp_server, tool
-
 from bob_agent import BobAgent
+
+from bob_agent_sdk import ModeDefinition, create_sdk_mcp_server, tool
 
 ORDERS = {"A-1001": "shipped", "A-1002": "waiting for payment"}
 

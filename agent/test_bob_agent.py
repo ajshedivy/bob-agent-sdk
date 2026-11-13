@@ -15,7 +15,6 @@ from agno.run.agent import (
     ToolCallStartedEvent,
 )
 from agno.run.base import RunStatus
-
 from bob_agent import BobAgent
 
 FAKE_BOB = Path(__file__).parent.parent / "tests" / "fake_bob.py"

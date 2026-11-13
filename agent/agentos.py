@@ -22,9 +22,9 @@ Then call the API:
 from pathlib import Path
 
 from agno.os import AgentOS
-from bob_agent_sdk import ModeDefinition
-
 from bob_agent import BobAgent
+
+from bob_agent_sdk import ModeDefinition
 
 bob_reviewer = BobAgent(
     name="Bob Reviewer",
