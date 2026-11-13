@@ -1,0 +1,305 @@
+"""Public types: options, messages and permission results."""
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, Union
+
+if TYPE_CHECKING:
+    from .tools import SdkMcpServer
+
+# ---------------------------------------------------------------- messages
+
+
+@dataclass
+class TextBlock:
+    text: str
+
+
+@dataclass
+class ThinkingBlock:
+    thinking: str
+
+
+@dataclass
+class ToolUseBlock:
+    """A tool call that Bob started."""
+
+    id: str
+    title: str
+    """Human-readable label, for example the shell command."""
+    kind: str | None
+    """ACP category: `read`, `edit`, `execute`, ..."""
+    input: dict[str, Any]
+    locations: list[str] = field(default_factory=list)
+    name: str | None = None
+    """Bob's tool name, for example `execute_command`. Only known when hooks
+    are enabled (`BobAgentOptions.hooks` is not None)."""
+
+
+ContentBlock = TextBlock | ThinkingBlock | ToolUseBlock
+
+
+@dataclass
+class AssistantMessage:
+    """Text, reasoning and tool calls from Bob."""
+
+    content: list[ContentBlock]
+
+
+@dataclass
+class ToolResultMessage:
+    """The final outcome of one tool call."""
+
+    tool_use_id: str
+    status: Literal["completed", "failed"]
+    output: str | None
+    """The text output of the tool, if it produced any."""
+    content: list[dict[str, Any]]
+    """Raw ACP tool content. File edits appear here as `{"type": "diff", ...}`."""
+    raw_output: Any = None
+
+    @property
+    def is_error(self) -> bool:
+        return self.status == "failed"
+
+
+@dataclass
+class PlanEntry:
+    content: str
+    status: str
+    priority: str | None = None
+
+
+@dataclass
+class PlanMessage:
+    """Bob's current todo list. Each update replaces the previous one."""
+
+    entries: list[PlanEntry]
+
+
+@dataclass
+class SystemMessage:
+    """Session metadata.
+
+    `subtype` is `init` when the session opens. Otherwise it is the ACP update
+    name, for example `current_mode_update` or `session_info_update`.
+    """
+
+    subtype: str
+    data: dict[str, Any]
+
+
+@dataclass
+class StreamEvent:
+    """A raw ACP `session/update`. Only sent with `include_partial_messages`."""
+
+    session_id: str
+    event: dict[str, Any]
+
+
+@dataclass
+class ResultMessage:
+    """Marks the end of one turn."""
+
+    session_id: str
+    stop_reason: str
+    """`end_turn`, `cancelled`, `max_tokens`, `max_turn_requests` or `refusal` from
+    Bob, or `max_turns` / `max_cost` when a limit from `BobAgentOptions` stopped the turn."""
+    duration_ms: int
+    num_tool_calls: int
+    result: str | None
+    """The last text that Bob wrote in this turn."""
+    is_error: bool = False
+    """True when the turn did not end normally or by `interrupt()`."""
+    num_turns: int | None = None
+    """Model requests that Bob made in this turn."""
+    cost: float | None = None
+    """Cost of this turn, in Bobcoins."""
+    total_cost: float | None = None
+    """Cost of the whole session so far, in Bobcoins. Includes subagents."""
+    usage: dict[str, Any] | None = None
+    """Bob's raw cost record for the session, for example `contextTokens`."""
+    model: str | None = None
+
+
+Message = (
+    AssistantMessage | ToolResultMessage | PlanMessage | SystemMessage | StreamEvent | ResultMessage
+)
+
+# ------------------------------------------------------------- permissions
+
+
+@dataclass
+class ToolPermissionContext:
+    session_id: str
+    options: list[dict[str, Any]]
+    """The raw choices that Bob offered (`optionId`, `name`, `kind`)."""
+
+
+@dataclass
+class PermissionResultAllow:
+    always: bool = False
+    """Also approve similar calls for the rest of the task, when Bob offers that."""
+
+
+@dataclass
+class PermissionResultDeny:
+    pass
+
+
+PermissionResult = PermissionResultAllow | PermissionResultDeny
+CanUseTool = Callable[[ToolUseBlock, ToolPermissionContext], Awaitable[PermissionResult]]
+
+# ------------------------------------------------------------------- hooks
+
+HookEvent = Literal[
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreCompact",
+    "PostCompact",
+    "PreToolUse",
+    "PostToolUse",
+    "PermissionRequest",
+    "PermissionResolved",
+    "Notification",
+    "Stop",
+    "SessionEnd",
+]
+
+HookCallback = Callable[[dict[str, Any]], Awaitable[dict[str, Any] | None]]
+"""Receives Bob's hook payload. Returns Bob's structured hook output, or None."""
+
+
+@dataclass
+class HookMatcher:
+    hooks: list[HookCallback]
+    matcher: str | None = None
+    """Regular expression. Tested against the tool name for tool events, and
+    against the source, trigger, type or reason for the other events that
+    have one. None matches everything."""
+    timeout: float | None = 60.0
+    """Seconds that each callback may take."""
+
+
+# --------------------------------------------------------- modes and agents
+
+DEFAULT_TOOL_GROUPS = ("read", "edit", "execute", "mcp", "skill", "todo", "subagent", "mode")
+
+
+@dataclass
+class ModeDefinition:
+    """A custom Bob mode: the role of the agent and the tool groups it may use."""
+
+    role_definition: str
+    """Who the agent is. This opens Bob's system prompt."""
+    custom_instructions: str | None = None
+    """How the agent must work. Added to the system prompt."""
+    groups: Sequence[str] = DEFAULT_TOOL_GROUPS
+    """Tool groups the agent may use. Leave one out to disable its tools."""
+    name: str = "SDK Agent"
+    description: str | None = None
+    allowed_subagents: Sequence[str] | None = None
+    slug: str | None = None
+    """Mode ID. Generated when None."""
+
+
+@dataclass
+class AgentDefinition:
+    """A subagent that Bob can start with its `spawn_subagent` tool."""
+
+    description: str
+    """Tells Bob when to use the subagent."""
+    prompt: str
+    """The subagent's system prompt."""
+    groups: Sequence[str] | None = None
+    """Tool groups. Bob's default is `read`, `edit`, `execute`."""
+    allow_tools: Sequence[str] | None = None
+    deny_tools: Sequence[str] | None = None
+    model_tier: str | None = None
+    max_turns: int | None = None
+
+
+@dataclass
+class Worktree:
+    """The git worktree of a session that runs with `isolation="worktree"`."""
+
+    path: Path
+    branch: str
+    repo: Path
+    """The main checkout that the worktree belongs to."""
+    removed: bool = False
+    """True once the session has closed and left no work, so the SDK removed
+    the worktree and its branch."""
+
+
+# ----------------------------------------------------------------- options
+
+
+class McpStdioServerConfig(TypedDict, total=False):
+    command: str  # required
+    args: list[str]
+    env: dict[str, str]
+
+
+class McpHttpServerConfig(TypedDict, total=False):
+    type: Literal["http"]  # required
+    url: str  # required
+    headers: dict[str, str]
+
+
+McpServerConfig = Union[McpStdioServerConfig, McpHttpServerConfig, "SdkMcpServer"]
+
+
+@dataclass
+class BobAgentOptions:
+    cwd: str | Path | None = None
+    """Workspace directory. Defaults to the current directory."""
+    mode: str | ModeDefinition | None = None
+    """Starting mode: `agent`, `plan`, `ask`, the slug of an existing custom mode,
+    or a `ModeDefinition` that the SDK creates for this session."""
+    agents: dict[str, AgentDefinition] = field(default_factory=dict)
+    """Subagents for this session, by name."""
+    skills: Sequence[str | Path] = ()
+    """Skill folders (each with a `SKILL.md`) to make available in this session."""
+    isolation: Literal["shared", "enforced", "worktree"] = "shared"
+    """How the session is separated from other SDK sessions.
+    `shared`: it works in `cwd`, and sessions there see each other's subagents and skills.
+    `enforced`: as `shared`, but it cannot use what only another session defined.
+    `worktree`: it works in a git worktree of its own, on a new branch."""
+    hooks: dict[HookEvent, list[HookMatcher]] | None = None
+    """Python callbacks for Bob's hook events. Any value other than None, also
+    `{}`, turns hooks on and so makes `ToolUseBlock.name` available."""
+    max_turns: int | None = None
+    """Stop a turn after this number of model requests."""
+    max_cost: float | None = None
+    """Stop when the session has spent this many Bobcoins since it connected."""
+    team_id: str | None = None
+    """Bob team to run under, for accounts with more than one team."""
+    mcp_servers: dict[str, McpServerConfig] = field(default_factory=dict)
+    """Extra MCP servers for this session, by name."""
+    can_use_tool: CanUseTool | None = None
+    """Called when Bob asks for approval. Without it, such tool calls are rejected."""
+    auto_approve: bool = False
+    """Let Bob approve tool calls itself when its safety rules allow."""
+    resume: str | None = None
+    """Session ID of an earlier session to continue."""
+    include_partial_messages: bool = False
+    """Also yield a `StreamEvent` for every raw update (text deltas, tool progress)."""
+    api_key: str | None = None
+    """Bob API key. Defaults to `BOB_API_KEY`; without either, Bob uses its saved SSO login."""
+    trust: bool = False
+    """Save the workspace as trusted."""
+    accept_license: bool = False
+    disable_mcp: bool = False
+    """Do not start the MCP servers from Bob's own configuration."""
+    disable_subagents: bool = False
+    log_level: str | None = None
+    cli_path: str | Path | None = None
+    """Path to the `bob` executable. Defaults to the one on PATH."""
+    env: dict[str, str] = field(default_factory=dict)
+    """Extra environment variables for the Bob process."""
+    stderr: Callable[[str], None] | None = None
+    """Called with each line that Bob writes to stderr."""
