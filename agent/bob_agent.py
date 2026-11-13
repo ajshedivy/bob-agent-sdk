@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from agno.agents.base import BaseExternalAgent
 from agno.models.response import ToolExecution
@@ -27,6 +27,21 @@ from agno.run.agent import (
 )
 
 import bob_agent_sdk as sdk
+
+
+def _tool_name(tool: sdk.ToolUseBlock) -> str:
+    """The name Agno shows for a Bob tool call.
+
+    Bob's tool name (`execute_command`) is only known with hooks. Without it,
+    use the kind of action (`execute`, `edit`, `read`), which reads well next
+    to the arguments. Tools without a specific kind, such as MCP tools, have
+    a descriptive title instead.
+    """
+    if tool.name:
+        return tool.name
+    if tool.kind and tool.kind != "other":
+        return tool.kind
+    return tool.title or "tool"
 
 
 @dataclass
@@ -42,8 +57,10 @@ class BobAgent(BaseExternalAgent):
         mode: `agent`, `plan`, `ask`, a custom mode slug, or a `ModeDefinition`
             with the agent's own role, instructions and tool groups.
         cwd: Workspace directory. Defaults to the current directory.
-        auto_approve: Let Bob approve tool calls itself. An AgentOS run has
-            nobody to ask, so without this Bob's approval requests are rejected.
+        auto_approve: Let Bob approve tool calls itself.
+        db: An Agno database. With a database and `auto_approve=False`, Bob's
+            approval requests pause the run, and a person confirms or rejects
+            each one in the chat. Without a database they are rejected.
         max_turns: Stop a run after this number of model requests.
         max_cost: Stop a run when the session has spent this many Bobcoins.
         mcp_servers: In-process tools and external MCP servers.
@@ -63,11 +80,63 @@ class BobAgent(BaseExternalAgent):
     skills: Sequence[str | Path] = ()
     isolation: str = "shared"
     options_kwargs: dict[str, Any] = field(default_factory=dict)
-    framework: str = "bob-agent-sdk"
+
+    _sdk_name: ClassVar[str] = "bob-agent-sdk"
 
     # Agno session ID -> (Bob session ID, the directory that session ran in).
     # A Bob session can only be resumed in the directory where it started.
     _bob_sessions: dict[str, tuple[str, str]] = field(default_factory=dict, init=False, repr=False)
+
+    @property
+    def _uses_native_hitl(self) -> bool:
+        """Whether Bob's approval requests go to a person through Agno.
+
+        That needs a database to hold the paused run. It does not apply when
+        Bob approves on its own, or when your own `can_use_tool` decides.
+        """
+        return (
+            self.db is not None
+            and not self.auto_approve
+            and "can_use_tool" not in self.options_kwargs
+        )
+
+    def acontinue_run(self, run_response: Any = None, **kwargs: Any) -> Any:
+        """Deliver a person's decisions to the run that is waiting for them."""
+        from agno.agents._hitl import continue_run
+
+        if not self._uses_native_hitl:
+            raise ValueError("Only a run that is paused on an approval request can be continued")
+        return continue_run(self, run_response, **kwargs)
+
+    def continue_run(self, run_response: Any = None, **kwargs: Any) -> Any:
+        """Synchronous form of `acontinue_run`."""
+        from agno.agents._hitl import sync_events
+        from agno.agents.base import run_coroutine_sync
+
+        continuation = self.acontinue_run(run_response, **kwargs)
+        return (
+            sync_events(continuation) if kwargs.get("stream") else run_coroutine_sync(continuation)
+        )
+
+    def _ask_person(self) -> sdk.CanUseTool | None:
+        """An approval callback that pauses the Agno run until a person decides."""
+        from agno.agents._hitl import active_bridge
+
+        # The bridge belongs to the current run. Take it now: Bob's request
+        # arrives later, in another task.
+        bridge = active_bridge()
+        if bridge is None:
+            return None
+
+        async def can_use_tool(
+            tool: sdk.ToolUseBlock, context: sdk.ToolPermissionContext
+        ) -> sdk.PermissionResult:
+            confirmed = await bridge.request(
+                _tool_name(tool), tool.input, {"tool_call_id": tool.id}
+            )
+            return sdk.PermissionResultAllow() if confirmed else sdk.PermissionResultDeny()
+
+        return can_use_tool
 
     def _build_options(self, *, streaming: bool = False, **kwargs: Any) -> sdk.BobAgentOptions:
         options: dict[str, Any] = {
@@ -84,6 +153,8 @@ class BobAgent(BaseExternalAgent):
             "include_partial_messages": streaming,
             **self.options_kwargs,
         }
+        if self._uses_native_hitl:
+            options["can_use_tool"] = self._ask_person()
         earlier = self._bob_sessions.get(kwargs.get("session_id") or "")
         if earlier:
             # Continue the Bob session of this Agno session, where it ran before.
@@ -143,9 +214,7 @@ class BobAgent(BaseExternalAgent):
                     if isinstance(block, sdk.ToolUseBlock):
                         tool = ToolExecution(
                             tool_call_id=block.id,
-                            # Bob's tool name is only known with hooks. The title
-                            # (for example the shell command) is always there.
-                            tool_name=block.name or block.title or block.kind or "tool",
+                            tool_name=_tool_name(block),
                             tool_args=block.input,
                         )
                         started[block.id] = tool

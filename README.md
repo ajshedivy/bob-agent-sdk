@@ -1,6 +1,6 @@
 # bob-agent-sdk
 
-A Python SDK for building custom agents on [IBM Bob Shell](https://bob.ibm.com/docs/shell). You write a Python file, and Bob does the work: it reads and edits files, runs commands and calls your tools.
+A Python SDK for building custom agents on [IBM Bob Shell](https://bob.ibm.com/docs/shell). 
 
 ## Requirements
 
