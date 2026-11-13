@@ -8,6 +8,17 @@ A Python SDK for building custom agents on [IBM Bob Shell](https://bob.ibm.com/d
 - Bob Shell 2.1 or later on your `PATH` (check with `bob --version`)
 - A Bob API key. See [Login](#login).
 
+
+## Skill for coding agents
+
+The [`use-bob-agents-sdk`](skills/use-bob-agents-sdk/SKILL.md) skill teaches a coding agent, such as Claude Code or Bob, how to write agents with this SDK. Install it with the [skills](https://github.com/vercel-labs/skills) command:
+
+```bash
+npx skills add ajshedivy/bob-agent-sdk
+```
+
+Then ask your coding agent to build an agent with the Bob Agent SDK. The skill installs the SDK from source into your project, so you do not need to clone this repository first.
+
 ## Install
 
 ```bash
@@ -26,11 +37,9 @@ uv add /path/to/bob-agent-sdk
 import asyncio
 from bob_agent_sdk import query
 
-
 async def main():
     async for message in query(prompt="What does this project do?"):
         print(message)
-
 
 asyncio.run(main())
 ```
@@ -129,7 +138,6 @@ from bob_agent_sdk import BobAgentOptions, create_sdk_mcp_server, query, tool
 async def get_order_status(args):
     return ORDERS.get(args["order_id"], "unknown order")
 
-
 options = BobAgentOptions(
     mcp_servers={"shop": create_sdk_mcp_server("shop", tools=[get_order_status])},
     auto_approve=True,
@@ -160,12 +168,10 @@ Bob decides which tool calls need approval. Read-only tools, and everything allo
 ```python
 from bob_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
-
 async def can_use_tool(tool, context):
     if tool.kind == "execute" and "rm " in tool.input.get("command", ""):
         return PermissionResultDeny()
     return PermissionResultAllow()  # or PermissionResultAllow(always=True)
-
 
 options = BobAgentOptions(can_use_tool=can_use_tool)
 ```
@@ -284,7 +290,6 @@ A hook is an async Python function that Bob calls at a fixed point of its work. 
 ```python
 from bob_agent_sdk import BobAgentOptions, HookMatcher
 
-
 async def block_rm(event):
     if "rm " in event["tool_input"].get("command", ""):
         return {
@@ -294,7 +299,6 @@ async def block_rm(event):
                 "permissionDecisionReason": "Deleting files is not allowed.",
             }
         }
-
 
 options = BobAgentOptions(
     hooks={"PreToolUse": [HookMatcher(matcher="^execute_command$", hooks=[block_rm])]},
@@ -394,6 +398,7 @@ uv run --env-file .env examples/quick_start.py
 ## Agno and AgentOS
 
 The [`agent`](agent/README.md) folder has `BobAgent`, an adapter that runs a Bob agent as an Agno external agent. Use it to call Bob through Agno's `run()` and `print_response()`, or to serve it with AgentOS.
+
 
 ## How it works
 
