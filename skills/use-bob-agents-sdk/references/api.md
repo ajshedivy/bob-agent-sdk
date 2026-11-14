@@ -36,6 +36,7 @@ async with BobSDKClient(options) as client:  # several turns, one session
 | `agents` | dict of `AgentDefinition` | Subagents, by name |
 | `skills` | list of paths | Skill folders (each with `SKILL.md`) to attach |
 | `hooks` | dict or `None` | Python callbacks for Bob's hook events. Any non-`None` value, also `{}`, turns hooks on |
+| `hook_scope` | `"workspace"` | Where the hook command is registered: the workspace's `.bob/settings.json`, or `"global"` for Bob's `~/.bob/settings/settings.json` |
 | `isolation` | `"shared"` | `shared`, `enforced` or `worktree` |
 | `output_format` | `None` | A Pydantic model class, or `{"type": "json_schema", "schema": {...}}`. The answer is in `ResultMessage.structured_output` |
 | `max_turns` | `None` | Stop a `query()` after this many model requests |

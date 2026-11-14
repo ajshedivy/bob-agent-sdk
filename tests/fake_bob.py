@@ -20,13 +20,21 @@ SCOPED = {"spawn_subagent": "name", "use_skill": "skill_name", "switch_mode": "m
 
 
 def run_hooks(cwd: str, event: str, fields: dict) -> dict:
-    """Run the hook commands in `.bob/settings.json` the way Bob does."""
-    settings = Path(cwd) / ".bob" / "settings.json"
-    if not settings.exists():
-        return {}
+    """Run the hook commands in Bob's global settings and the workspace's
+    `.bob/settings.json`, the way Bob does."""
+    files = [
+        Path.home() / ".bob" / "settings" / "settings.json",
+        Path(cwd) / ".bob" / "settings.json",
+    ]
+    groups = [
+        group
+        for settings in files
+        if settings.exists()
+        for group in json.loads(settings.read_text()).get("hooks", {}).get(event, [])
+    ]
     payload = {"session_id": "session-1", "cwd": cwd, "hook_event_name": event, **fields}
     output: dict = {}
-    for group in json.loads(settings.read_text()).get("hooks", {}).get(event, []):
+    for group in groups:
         for handler in group["hooks"]:
             done = subprocess.run(
                 ["sh", "-c", handler["command"]],

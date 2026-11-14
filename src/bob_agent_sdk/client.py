@@ -31,7 +31,7 @@ from ._messages import MessageAssembler, to_dict, tool_use_block
 from ._output import BOB_TOOL_NAME, SERVER_KEY, OutputCollector
 from ._usage import UsageSnapshot, parse_export
 from ._version import __version__
-from ._workspace import WorkspaceFiles
+from ._workspace import GLOBAL_SETTINGS, WorkspaceFiles
 from ._worktree import close_worktree, create_worktree
 from .tools import McpEndpoint, SdkMcpServer
 from .types import (
@@ -162,7 +162,13 @@ class BobSDKClient:
                 self._mode = mode
             workspace.add_agents(opts.agents)
             workspace.add_skills(opts.skills)
-            if hooks is not None:
+            if hooks is not None and opts.hook_scope == "global":
+                # Bob's global settings, counted across every workspace of this user.
+                home = WorkspaceFiles(str(Path.home()))
+                self._stack.callback(home.cleanup)
+                home.add_hook_bridge(GLOBAL_SETTINGS)
+                home.install()
+            elif hooks is not None:
                 workspace.add_hook_bridge()
             workspace.install()
 

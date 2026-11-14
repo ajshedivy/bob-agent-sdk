@@ -278,6 +278,11 @@ class BobAgentOptions:
     hooks: dict[HookEvent, list[HookMatcher]] | None = None
     """Python callbacks for Bob's hook events. Any value other than None, also
     `{}`, turns hooks on and so makes `ToolUseBlock.name` available."""
+    hook_scope: Literal["workspace", "global"] = "workspace"
+    """Where the SDK registers its hook command. `workspace`: in `.bob/settings.json`
+    of the workspace. `global`: in Bob's global `~/.bob/settings/settings.json`, so
+    nothing is written to the workspace. The command does nothing in Bob sessions
+    that the SDK did not start."""
     output_format: dict[str, Any] | type[BaseModel] | None = None
     """Make the agent answer with data, not only text. Pass a Pydantic model class,
     or `{"type": "json_schema", "schema": {...}}`. The answer is in

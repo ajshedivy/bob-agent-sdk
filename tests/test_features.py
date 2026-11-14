@@ -187,7 +187,7 @@ def test_hook_bridge_is_removed_and_user_settings_survive(cli: Path, tmp_path: P
     assert during["session"] == {"maxTurns": 50}
     assert during["hooks"]["Stop"] == [user_hook, bridge_group()]
     assert set(during["hooks"]) == set(HOOK_EVENTS)
-    assert json.loads(settings.read_text()) == original
+    assert settings.read_text() == json.dumps(original)  # The exact bytes, not reformatted.
 
 
 def test_workspace_is_clean_after_the_session(cli: Path, tmp_path: Path) -> None:

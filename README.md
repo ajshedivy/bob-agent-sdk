@@ -418,6 +418,7 @@ The SDK does not add the `mcp` group for you. That group also gives the agent ev
 | `agents` | Subagents, by name. |
 | `skills` | Skill folders to attach. |
 | `hooks` | Python callbacks for Bob's hook events. |
+| `hook_scope` | `workspace` (default) or `global`: where the SDK registers its hook command. See [Files in your workspace](#files-in-your-workspace). |
 | `isolation` | `shared`, `enforced` or `worktree`. See above. |
 | `max_turns`, `max_cost` | Limits. See above. |
 | `output_format` | A Pydantic model class or a JSON Schema for the answer. See above. |
@@ -481,7 +482,7 @@ The SDK starts `bob acp` and talks to it with the [Agent Client Protocol](https:
 | Role and tool groups | The SDK writes a custom mode to `.bob/plugins/bob-agent-sdk-<id>/custom_modes.yaml`. |
 | Subagents | The SDK writes `.bob/agents/<name>.md`. |
 | Skills | The SDK links each skill folder as `.bob/skills/<name>`. |
-| Hooks and tool names | The SDK adds one hook command per event to `.bob/settings.json`. The command sends the event to your Python process. |
+| Hooks and tool names | The SDK adds one hook command per event to `.bob/settings.json`, or with `hook_scope="global"` to Bob's global `~/.bob/settings/settings.json`. The command sends the event to your Python process. |
 | Team | The SDK sets Bob's `team` session option. |
 
 ### Files in your workspace
@@ -499,8 +500,10 @@ Several sessions can use one workspace at the same time:
 The SDK never overwrites or deletes your own files:
 
 - It refuses to start if a subagent file or skill with the same name already exists.
-- It keeps your other settings in `.bob/settings.json`.
+- It keeps your other settings in `.bob/settings.json`. When nothing else in the file changed during the session, the file gets its exact bytes back.
 - It deletes a file only if the file still has the content that the SDK wrote.
+
+Bob reads subagents only from the workspace, so they must be there. Hooks need not be: with `hook_scope="global"` the SDK registers its hook command in Bob's global settings instead, and a session that uses only hooks writes nothing to the workspace. The command does nothing in Bob sessions that the SDK did not start. Sessions in all workspaces share the one entry, and the last one to close removes it. Bob uses global hooks, like workspace hooks, only in a trusted folder (see `trust`).
 
 If a session is killed before it can clean up, its files stay. The next SDK session that starts or closes in that workspace removes them. You can also remove them yourself:
 
@@ -510,7 +513,7 @@ from bob_agent_sdk import cleanup_workspace
 cleanup_workspace("/path/to/workspace")
 ```
 
-The SDK tracks its files in `.bob/.bob-agent-sdk/`, and removes that folder when no session is left. Its lock files are in your temporary directory, not in the workspace.
+The SDK tracks its files outside the workspace, in `~/.bob-agent-sdk/workspaces/<key>/`, and removes that folder when no session is left. Its lock files are in your temporary directory. So Bob, `find` and `git status` never show the SDK's bookkeeping. Earlier versions kept it in `.bob/.bob-agent-sdk/` of the workspace; the SDK still reads that folder, cleans up after the sessions it lists, and removes it.
 
 The locking works on Windows, macOS and Linux. On Windows, hooks are not supported, because the hook command needs a POSIX shell. Skills use symbolic links, which Windows allows only in Developer Mode or for administrators. Nothing has been run on Windows yet.
 
