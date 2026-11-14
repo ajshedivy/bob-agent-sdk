@@ -19,6 +19,7 @@ from bob_agent_sdk import (
     cleanup_workspace,
 )
 from bob_agent_sdk._hooks import bridge_group
+from bob_agent_sdk._workspace import _sha, state_dir
 
 SCRIPT = Path(__file__).parent / "session_script.py"
 HELPER = AgentDefinition(description="Helps", prompt="You help.")
@@ -203,3 +204,72 @@ def test_many_sessions_starting_at_once(cli: Path, workspace: Path, skill: Path)
     outputs = [process.communicate(timeout=120)[0].split() for process in processes]
     assert outputs == [["ready", "hooks=5"]] * 6
     assert files(workspace) == []
+
+
+# ------------------------------------------------- state outside the workspace
+
+
+def test_the_sdks_bookkeeping_is_outside_the_workspace(
+    cli: Path, workspace: Path, skill: Path
+) -> None:
+    holder = start(cli, workspace, skill, "hold")
+    wait_ready(holder)
+    assert not (workspace / ".bob" / ".bob-agent-sdk").exists()
+    assert len(list((state_dir(workspace) / "sessions").glob("*.json"))) == 1
+    holder.communicate("\n", timeout=60)
+    assert files(workspace) == []
+    assert not state_dir(workspace).exists()
+
+
+def test_state_from_an_older_sdk_in_the_workspace_is_cleaned_up(workspace: Path) -> None:
+    # What an earlier SDK version left when its session was killed.
+    agent = workspace / ".bob" / "agents" / "old.md"
+    agent.parent.mkdir(parents=True)
+    agent.write_text("old")
+    legacy = workspace / ".bob" / ".bob-agent-sdk" / "sessions"
+    legacy.mkdir(parents=True)
+    resource = {"kind": "file", "path": ".bob/agents/old.md", "sha": _sha("old")}
+    manifest = {"pid": 1, "resources": [resource], "dirs": [".bob", ".bob/agents"]}
+    (legacy / "0123456789abcdef.json").write_text(json.dumps(manifest))
+
+    cleanup_workspace(workspace)
+    assert files(workspace) == []
+
+
+def test_global_hooks_leave_the_workspace_untouched(
+    cli: Path, workspace: Path, home: Path, tmp_path: Path
+) -> None:
+    settings = home / ".bob" / "settings" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    original = json.dumps({"bobShell": {"lastRunVersion": "2.1.0"}})
+    settings.write_text(original)
+    other = tmp_path / "other"
+    other.mkdir()
+    fired = []
+
+    async def count(event):
+        fired.append(event["tool_use_id"])
+
+    def options(cwd: Path) -> BobAgentOptions:
+        hooks = {"PreToolUse": [HookMatcher(hooks=[count])]}
+        return BobAgentOptions(cli_path=cli, cwd=cwd, hooks=hooks, hook_scope="global")
+
+    async def run() -> None:
+        # Two sessions in two workspaces share the one global entry.
+        first = BobSDKClient(options(workspace))
+        second = BobSDKClient(options(other))
+        await first.connect()
+        await second.connect()
+        during = json.loads(settings.read_text())
+        assert during["hooks"]["PreToolUse"] == [bridge_group()]
+        assert during["bobShell"] == {"lastRunVersion": "2.1.0"}
+        await first.disconnect()
+        await second.query("work")
+        async for _ in second.receive_response():
+            pass
+        assert len(fired) == 5  # The second session's hooks still run.
+        await second.disconnect()
+
+    asyncio.run(run())
+    assert files(workspace) == [] and files(other) == []
+    assert settings.read_text() == original

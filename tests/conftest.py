@@ -17,6 +17,14 @@ def login(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("BOB_USE_SSO", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def home(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A home directory of its own: the SDK keeps its state there, and Bob its global settings."""
+    path = tmp_path_factory.mktemp("home")
+    monkeypatch.setenv("HOME", str(path))
+    return path
+
+
 @pytest.fixture
 def cli(tmp_path: Path) -> Path:
     """An executable named `bob` that runs the stand-in agent."""

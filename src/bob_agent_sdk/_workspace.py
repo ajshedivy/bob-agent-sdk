@@ -8,8 +8,9 @@ Several SDK sessions can use one workspace at the same time, and a session can
 be killed before it cleans up. The rules that keep this safe:
 
 - **One lock.** Every change happens while holding the workspace lock.
-- **One manifest per session.** `.bob/.bob-agent-sdk/sessions/<id>.json` lists
-  what the session uses. The session also holds a lock of its own for as long
+- **One manifest per session.** `~/.bob-agent-sdk/workspaces/<key>/sessions/<id>.json`
+  lists what the session uses. It is outside the workspace: Bob never reads it,
+  so neither Bob's tools nor git see it. The session also holds a lock of its own for as long
   as it lives, so a manifest whose session lock is free belongs to a dead
   session.
 - **Shared resources are counted.** Two sessions that need the same subagent
@@ -19,6 +20,11 @@ be killed before it cleans up. The rules that keep this safe:
   in the workspace, or by `cleanup_workspace()`.
 - **Only the SDK's own files are removed.** A file is deleted only if it still
   has the content the SDK wrote, a link only if it still has the same target.
+  A settings file that the SDK added its hook bridge to gets its original bytes
+  back when nothing else in it changed.
+- **Old state is migrated.** Earlier SDK versions kept the manifests in the
+  workspace, in `.bob/.bob-agent-sdk/`. They are read as well, so those sessions
+  are still counted and cleaned up, and the folder goes once it is empty.
 """
 
 from __future__ import annotations
@@ -42,14 +48,22 @@ from .types import AgentDefinition, ModeDefinition
 
 _NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 _SKILL_NAME = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
-_STATE_DIR = ".bob/.bob-agent-sdk"
+_LEGACY_STATE_DIR = ".bob/.bob-agent-sdk"  # Where earlier SDK versions kept their manifests.
 _SETTINGS = ".bob/settings.json"
+# Bob's global settings file, relative to the home directory.
+GLOBAL_SETTINGS = ".bob/settings/settings.json"
+
+
+def state_dir(root: Path) -> Path:
+    """The SDK's bookkeeping for one workspace. Outside the workspace, so Bob never sees it."""
+    return Path.home() / ".bob-agent-sdk" / "workspaces" / path_key(root)
+
 
 # A resource is a JSON object in the manifest. `kind` and `path` identify it:
 #   {"kind": "file",  "path": ..., "sha": ...}     a file with known content
 #   {"kind": "link",  "path": ..., "target": ...}  a symlink to a skill folder
 #   {"kind": "mode",  "path": ..., "sha": ..., "slug": ...}  a custom mode file
-#   {"kind": "hooks", "path": ".bob/settings.json", "created_file": bool}
+#   {"kind": "hooks", "path": ..., "created_file": bool, "original": str | None}
 Resource = dict[str, Any]
 Manifest = dict[str, Any]
 
@@ -134,17 +148,20 @@ class WorkspaceFiles:
                 {"kind": "link", "path": f".bob/skills/{source.name}", "target": str(source)}
             )
 
-    def add_hook_bridge(self) -> None:
-        """Add the SDK's hook command to every event in `.bob/settings.json`."""
+    def add_hook_bridge(self, settings: str = _SETTINGS) -> None:
+        """Add the SDK's hook command to every event in the settings file `settings`,
+        relative to the root: `.bob/settings.json` of a workspace, or `GLOBAL_SETTINGS`
+        of a home directory."""
         if os.name == "nt":
             raise BobSDKError("Hooks need a POSIX shell and are not supported on Windows.")
-        self._resources.append({"kind": "hooks", "path": _SETTINGS, "created_file": False})
+        self._resources.append({"kind": "hooks", "path": settings, "created_file": False})
 
     # ---------------------------------------------------------- life cycle
 
     def install(self) -> None:
         """Write everything that was declared. Changes nothing if it raises."""
         if not self._resources:
+            self.reap()  # A session without files still cleans up after dead ones.
             return
         with self._locked():
             others = self._reap()
@@ -169,7 +186,7 @@ class WorkspaceFiles:
 
     def reap(self) -> None:
         """Clean up after dead sessions only."""
-        if not (self._root / _STATE_DIR).exists():
+        if not (self._state / "sessions").exists() and not (self._legacy / "sessions").exists():
             return
         with self._locked():
             self._remove_unused_dirs(self._reap())
@@ -228,6 +245,8 @@ class WorkspaceFiles:
                     continue  # Someone put the entry there by hand. It is not ours to remove.
                 else:
                     resource["created_file"] = not target.exists()
+                    # Kept so that cleanup can give the file its exact bytes back.
+                    resource["original"] = target.read_text() if target.exists() else None
             elif kind == "mode":
                 for other in owned.values():
                     if other["kind"] == "mode" and other["slug"] == resource["slug"]:
@@ -251,14 +270,11 @@ class WorkspaceFiles:
         self._resources = kept
 
         other_dirs = {d for manifest in others for d in manifest["dirs"]}
-        # The manifest path is included so that `.bob` is tracked even when the
-        # session has no other file. The state folders have their own cleanup.
-        paths = [r["path"] for r in self._resources] + [f"{_STATE_DIR}/sessions/x"]
         dirs: set[str] = set()
-        for path in paths:
+        for path in (r["path"] for r in self._resources):
             for parent in Path(path).parents:
                 relative = parent.as_posix()
-                if relative == "." or relative.startswith(_STATE_DIR):
+                if relative == ".":
                     continue
                 # Keep a directory alive if this session creates it, or if a
                 # session that created it is still alive.
@@ -299,10 +315,15 @@ class WorkspaceFiles:
 
     def _reap(self) -> list[Manifest]:
         """Clean up after dead sessions. Returns the manifests of the other live ones."""
-        sessions = self._root / _STATE_DIR / "sessions"
+        paths = [
+            path
+            for sessions in (self._state / "sessions", self._legacy / "sessions")
+            if sessions.is_dir()
+            for path in sorted(sessions.glob("*.json"))
+        ]
         live: list[Manifest] = []
         dead: list[tuple[Path, FileLock, Manifest]] = []
-        for path in sorted(sessions.glob("*.json")) if sessions.is_dir() else []:
+        for path in paths:
             if path.stem == self._id:
                 continue
             lock = self._lock_for(path.stem)
@@ -330,7 +351,9 @@ class WorkspaceFiles:
                 continue
             target = self._root / path
             if kind == "hooks":
-                self._remove_bridge(target, resource.get("created_file", False))
+                self._remove_bridge(
+                    target, resource.get("created_file", False), resource.get("original")
+                )
             elif kind == "link":
                 if target.is_symlink() and os.readlink(target) == resource["target"]:
                     target.unlink()
@@ -338,7 +361,7 @@ class WorkspaceFiles:
                 target.unlink()
 
     @staticmethod
-    def _remove_bridge(path: Path, created_file: bool) -> None:
+    def _remove_bridge(path: Path, created_file: bool, original: str | None = None) -> None:
         if not path.exists():
             return
         try:
@@ -356,16 +379,18 @@ class WorkspaceFiles:
             settings.pop("hooks", None)
         if not settings and created_file:
             path.unlink()
+        elif original is not None and _same_json(original, settings):
+            _atomic_write(path, original)  # Nothing else changed: the exact bytes come back.
         else:
             _atomic_write(path, json.dumps(settings, indent=2) + "\n")
 
     def _remove_unused_dirs(self, others: list[Manifest]) -> None:
         """Remove the SDK's state folders once no session is left, then the empty
         directories that closed or dead sessions created."""
-        state = self._root / _STATE_DIR
-        for directory in (state / "sessions", state):
-            if directory.is_dir() and not any(directory.iterdir()):
-                directory.rmdir()
+        for state in (self._state, self._legacy):
+            for directory in (state / "sessions", state):
+                if directory.is_dir() and not any(directory.iterdir()):
+                    directory.rmdir()
         in_use = {d for other in others for d in other["dirs"]}
         for relative in sorted(self._orphan_dirs - in_use, key=len, reverse=True):  # Deepest first.
             directory = self._root / relative
@@ -375,8 +400,16 @@ class WorkspaceFiles:
 
     # --------------------------------------------------------------- utils
 
+    @property
+    def _state(self) -> Path:
+        return state_dir(self._root)
+
+    @property
+    def _legacy(self) -> Path:
+        return self._root / _LEGACY_STATE_DIR
+
     def _manifest_path(self, session_id: str) -> Path:
-        return self._root / _STATE_DIR / "sessions" / f"{session_id}.json"
+        return self._state / "sessions" / f"{session_id}.json"
 
     def _lock_for(self, name: str) -> FileLock:
         """A lock for this workspace. `name` is `workspace` or a session ID."""
@@ -408,6 +441,13 @@ def _read_settings(path: Path) -> dict[str, Any]:
     if not isinstance(settings, dict) or not isinstance(settings.get("hooks", {}), dict):
         raise BobSDKError(f"{path} does not have the expected shape. The SDK did not change it.")
     return settings
+
+
+def _same_json(text: str, value: Any) -> bool:
+    try:
+        return bool(json.loads(text) == value)
+    except json.JSONDecodeError:
+        return False
 
 
 def _has_bridge(settings: dict[str, Any]) -> bool:
