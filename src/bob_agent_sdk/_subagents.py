@@ -143,6 +143,9 @@ class SubagentTracker:
             if (
                 name == SPAWN_TOOL  # Subagents cannot start subagents.
                 or tool_call_id in self._agent_calls
+                # The first event for an ID counts: the commands that Bob runs can
+                # also reach the hook server.
+                or tool_call_id in self._calls
                 or not self._running
             ):
                 return
