@@ -15,7 +15,8 @@ Bob runs the agent's own tool calls one at a time, except that the
 a hook event for another tool is a subagent's. With one subagent running, the
 SDK reports it at once. With several, it cannot tell which one made the call.
 A subagent waits for its own tool call, so when only one subagent is still
-running while the call is open, that one made it. Calls that stay unknown are
+running while the call is provably open (its permission request or its
+PostToolUse), that one made it. Calls that stay unknown are
 reported from the export at the end of the turn. Each tool call and result is
 reported once.
 """
@@ -126,7 +127,7 @@ class SubagentTracker:
             return None
         call = self._calls.get(tool_call_id)
         if call is not None:
-            self._confirm(call)  # The call comes before its permission request.
+            self._confirm(call, resolve=True)  # The call comes before its permission request.
             if call.ref is not None:
                 return call.ref
         return self._current() or self._shared_name()
@@ -163,7 +164,7 @@ class SubagentTracker:
             call = self._calls.get(tool_call_id)
             if call is None:
                 return
-            self._confirm(call)
+            self._confirm(call, resolve=True)
             if not call.reported or call.ref is None or tool_call_id in self._results:
                 return
             self._results.add(tool_call_id)
@@ -185,7 +186,7 @@ class SubagentTracker:
         call = self._calls.get(str(payload.get("tool_use_id")))
         if call is not None and not call.confirmed and call.timer is None:
             loop = asyncio.get_running_loop()
-            call.timer = loop.call_later(GRACE_SECONDS, self._confirm, call)
+            call.timer = loop.call_later(GRACE_SECONDS, self._confirm, call, False)
 
     # ------------------------------------------------------- end of a turn
 
@@ -294,15 +295,20 @@ class SubagentTracker:
         names = set(self._running.values())
         return SubagentRef(tool_use_id=None, name=names.pop() if len(names) == 1 else None)
 
-    def _confirm(self, call: _Call) -> None:
-        """The call is a subagent's. Emit it as soon as it is known whose."""
+    def _confirm(self, call: _Call, resolve: bool) -> None:
+        """The call is a subagent's. Emit it as soon as it is known whose.
+
+        With `resolve` (a permission request or PostToolUse: the call is still open, so its
+        subagent still runs), a call of unknown owner gets the one subagent still running. The
+        grace timer does not resolve: by then the call may be over and its subagent finished.
+        """
         if call.timer is not None:
             call.timer.cancel()
             call.timer = None
         if call.reported or call.block.id in self._agent_calls:
             return
         call.confirmed = True
-        if call.ref is None:
+        if call.ref is None and resolve:
             call.ref = self._current()
         if call.ref is not None:
             call.reported = True

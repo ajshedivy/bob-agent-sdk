@@ -84,26 +84,50 @@ def test_one_subagent_is_reported_live_then_completed_from_the_export(
     assert result.result is None
 
 
-def test_parallel_subagents_are_reported_at_the_end_of_the_turn(cli: Path, tmp_path: Path) -> None:
+def test_parallel_subagents_are_reported_once_each_and_under_their_own_spawn(
+    cli: Path, tmp_path: Path
+) -> None:
     messages = asyncio.run(collect("subagents:a,b", options(cli, tmp_path)))
     first_spawn_result = next(
         i for i, m in enumerate(messages) if isinstance(m, ToolResultMessage) and not m.subagent
     )
-    # Hook events cannot say which of two subagents made a call.
+    # While both run, hook events cannot say which subagent made a call.
     assert subagent_items(messages[:first_spawn_result]) == []
     items = subagent_items(messages)
+    assert len(items) == len(set(items))
     for spawn, name in (("spawn0", "a"), ("spawn1", "b")):
-        assert [item for item in items if item[2] == spawn] == [
-            ("text", f"{name} step 0", spawn),
-            ("call", f"{spawn}-ok", spawn),
-            ("result", f"{spawn}-ok", spawn),
-            ("text", f"{name} step 1", spawn),
-            ("call", f"{spawn}-bad", spawn),
-            ("result", f"{spawn}-bad", spawn),
-            ("text", f"{name} is done", spawn),
-        ]
+        assert sorted(item[:2] for item in items if item[2] == spawn) == sorted(
+            [
+                ("text", f"{name} step 0"),
+                ("call", f"{spawn}-ok"),
+                ("result", f"{spawn}-ok"),
+                ("text", f"{name} step 1"),
+                ("call", f"{spawn}-bad"),
+                ("result", f"{spawn}-bad"),
+                ("text", f"{name} is done"),
+            ]
+        )
     summaries = [m for m in messages if isinstance(m, SubagentResultMessage)]
-    assert [s.tool_use_id for s in summaries] == ["spawn0", "spawn1"]
+    assert {s.tool_use_id for s in summaries} == {"spawn0", "spawn1"}
+
+
+def test_when_one_subagent_is_left_its_calls_are_live_and_never_given_to_another(
+    cli: Path, tmp_path: Path
+) -> None:
+    # b runs at once and ends; its failed call has no PostToolUse, and its grace time runs out
+    # while a, which waits 2 s, still runs. That call stays b's. Then a runs alone: live.
+    messages = asyncio.run(collect("subagents:a:2,b", options(cli, tmp_path)))
+    items = subagent_items(messages)
+    assert len(items) == len(set(items))
+    assert {item[2] for item in items if item[1].startswith("spawn1-")} == {"spawn1"}
+    assert {item[2] for item in items if item[1].startswith("spawn0-")} == {"spawn0"}
+    spawn0_result = next(
+        i
+        for i, m in enumerate(messages)
+        if isinstance(m, ToolResultMessage) and m.tool_use_id == "spawn0"
+    )
+    assert ("call", "spawn0-ok", "spawn0") in subagent_items(messages[:spawn0_result])
+    assert ("result", "spawn0-ok", "spawn0") in subagent_items(messages[:spawn0_result])
 
 
 def test_a_subagent_permission_request_names_the_subagent(cli: Path, tmp_path: Path) -> None:

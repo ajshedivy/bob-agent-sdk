@@ -244,7 +244,7 @@ Bob does not stream a subagent's work over ACP. The SDK reports it from two othe
 | While the subagent runs | Its tool calls and successful results, from Bob's hook events. Needs hooks (`hooks={}` is enough). |
 | At the end of the turn, before the `ResultMessage` | From Bob's task export, everything not reported yet: its text, failed results, and calls that could not be tied to a subagent. Then one `SubagentResultMessage` per subagent, with its usage. |
 
-Each call and result is reported once. Bob's hook events do not say which subagent made a call. While several subagents run at the same time, the SDK reports a call only when it knows whose it is, so the work of parallel subagents can wait for the end of the turn. A subagent's tool call can need approval: `ToolPermissionContext.subagent` then names the subagent, as far as it is known.
+Each call and result is reported once. Bob's hook events do not say which subagent made a call. While several subagents run at the same time, the SDK reports a call only when it knows whose it is, so the work of parallel subagents can wait for the end of the turn. A subagent's tool call can need approval: `ToolPermissionContext.subagent` then names the subagent, as far as it is known. The commands Bob runs can reach the SDK's hook server too, so a command can add a tool call or result that looks like a subagent's while a subagent runs. Treat this record as a log of what the session did, not as proof.
 
 ## Skills
 

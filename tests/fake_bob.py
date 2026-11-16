@@ -148,11 +148,15 @@ class FakeBob:
 
         Each subagent runs `ok` (a hook-seen success), then `bad` (a failure: no
         PostToolUse), then writes text. A name ending in `!` asks for approval of `ok`.
+        `<name>:<seconds>` waits that long before it starts. Each spawn completes when its
+        subagent is done, as in Bob.
         """
         self.spend()
-        spawns = [
-            (f"spawn{n}", name.rstrip("!"), name.endswith("!")) for n, name in enumerate(names)
-        ]
+        spawns, delays = [], {}
+        for n, given in enumerate(names):
+            name, _, delay = given.partition(":")
+            spawns.append((f"spawn{n}", name.rstrip("!"), name.endswith("!")))
+            delays[f"spawn{n}"] = float(delay or 0)
         self.saved.append(
             {
                 "role": "assistant",
@@ -183,6 +187,7 @@ class FakeBob:
             )
 
         async def run(spawn_id, name, ask):
+            await asyncio.sleep(delays[spawn_id])
             nested = []
             for step, (tool, fails) in enumerate((("ok", False), ("bad", True))):
                 call_id = f"{spawn_id}-{tool}"
@@ -243,10 +248,9 @@ class FakeBob:
                     "_meta": {"timestamp": 1003},
                 }
             )
-            return nested
+            await finish(spawn_id, name, nested)
 
-        results = await asyncio.gather(*(run(*spawn) for spawn in spawns))
-        for (spawn_id, name, _), nested in zip(spawns, results, strict=True):
+        async def finish(spawn_id, name, nested):
             await send(
                 schema.ToolCallProgress(
                     session_update="tool_call_update",
@@ -284,6 +288,8 @@ class FakeBob:
                     },
                 }
             )
+
+        await asyncio.gather(*(run(*spawn) for spawn in spawns))
         self.save_request()
 
     async def prompt(self, session_id, prompt, **kwargs):
