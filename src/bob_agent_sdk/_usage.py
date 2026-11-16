@@ -20,7 +20,7 @@ class UsageSnapshot:
     """Bob's raw cost record. Token counts appear when Bob records them."""
     model: str | None = None
     model_requests: int = 0
-    """Assistant messages saved so far. Bob saves one per model request."""
+    """Assistant messages saved so far, also those of subagents. Bob saves one per model request."""
     tool_call_ids: set[str] = field(default_factory=set)
 
 
@@ -37,15 +37,23 @@ def parse_export(export: Any, session_id: str) -> UsageSnapshot | None:
             model=((task.get("env") or {}).get("model") or {}).get("id"),
         )
         for message in entry.get("messages") or []:
-            if message.get("role") != "assistant":
-                continue
-            snapshot.model_requests += 1
             data = message.get("data")
             if isinstance(data, str):
                 try:
                     data = json.loads(data)
                 except json.JSONDecodeError:
-                    continue
+                    data = None
+            if message.get("role") == "tool" and isinstance(data, dict):
+                # A subagent's conversation is saved inside its spawn_subagent tool message.
+                # Its model requests count too; its cost is already in the task's cost.
+                snapshot.model_requests += sum(
+                    1
+                    for nested in data.get("messages") or []
+                    if isinstance(nested, dict) and nested.get("role") == "assistant"
+                )
+            if message.get("role") != "assistant":
+                continue
+            snapshot.model_requests += 1
             for call in (data or {}).get("toolCalls") or []:
                 if call.get("id"):
                     snapshot.tool_call_ids.add(call["id"])

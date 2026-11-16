@@ -141,6 +141,157 @@ class FakeBob:
     async def cancel(self, session_id, **kwargs):
         self.cancelled.set()
 
+    async def subagents(self, session_id, send, names):
+        """Start one subagent per name, all at once, as Bob does for the spawn_subagent
+        calls of one response. Bob sends no ACP updates for a subagent's work: it shows
+        only in hook events and, at the end of the turn, in the task export.
+
+        Each subagent runs `ok` (a hook-seen success), then `bad` (a failure: no
+        PostToolUse), then writes text. A name ending in `!` asks for approval of `ok`.
+        `<name>:<seconds>` waits that long before it starts. Each spawn completes when its
+        subagent is done, as in Bob.
+        """
+        self.spend()
+        spawns, delays = [], {}
+        for n, given in enumerate(names):
+            name, _, delay = given.partition(":")
+            spawns.append((f"spawn{n}", name.rstrip("!"), name.endswith("!")))
+            delays[f"spawn{n}"] = float(delay or 0)
+        self.saved.append(
+            {
+                "role": "assistant",
+                "data": {
+                    "role": "assistant",
+                    "toolCalls": [
+                        {"id": spawn_id, "name": "spawn_subagent"} for spawn_id, _, _ in spawns
+                    ],
+                },
+            }
+        )
+        for spawn_id, name, _ in spawns:
+            tool_input = {"name": name, "description": f"work as {name}"}
+            fields = {
+                "tool_name": "spawn_subagent",
+                "tool_input": tool_input,
+                "tool_use_id": spawn_id,
+            }
+            await asyncio.to_thread(run_hooks, self.cwd, "PreToolUse", fields)
+            await send(
+                schema.ToolCallStart(
+                    session_update="tool_call",
+                    tool_call_id=spawn_id,
+                    title=f"Running subagent: {name}",
+                    status="pending",
+                    raw_input=tool_input,
+                )
+            )
+
+        async def run(spawn_id, name, ask):
+            await asyncio.sleep(delays[spawn_id])
+            nested = []
+            for step, (tool, fails) in enumerate((("ok", False), ("bad", True))):
+                call_id = f"{spawn_id}-{tool}"
+                tool_input = {"command": tool}
+                fields = {
+                    "tool_name": "execute_command",
+                    "tool_input": tool_input,
+                    "tool_use_id": call_id,
+                }
+                await asyncio.to_thread(run_hooks, self.cwd, "PreToolUse", fields)
+                if ask and not fails:
+                    call = dict(
+                        tool_call_id=call_id, title=tool, kind="execute", raw_input=tool_input
+                    )
+                    await self.conn.request_permission(
+                        session_id=session_id,
+                        tool_call=schema.ToolCallUpdate(**call),
+                        options=[
+                            schema.PermissionOption(
+                                option_id="allow", name="Allow", kind="allow_once"
+                            )
+                        ],
+                    )
+                nested.append(
+                    {
+                        "role": "assistant",
+                        "content": f"{name} step {step}",
+                        "_meta": {"timestamp": 1000 + step},
+                        "toolCalls": [
+                            {"id": call_id, "name": "execute_command", "arguments": tool_input}
+                        ],
+                    }
+                )
+                output = f"{tool} failed" if fails else f"{tool} output"
+                if not fails:
+                    await asyncio.to_thread(
+                        run_hooks, self.cwd, "PostToolUse", {**fields, "tool_response": output}
+                    )
+                nested.append(
+                    {
+                        "role": "tool",
+                        "content": output,
+                        "_meta": {"timestamp": 1000 + step},
+                        "toolUsage": {
+                            "signature": {
+                                "id": call_id,
+                                "name": "execute_command",
+                                "isError": fails,
+                            }
+                        },
+                    }
+                )
+            nested.append(
+                {
+                    "role": "assistant",
+                    "content": f"{name} is done",
+                    "stop": True,
+                    "_meta": {"timestamp": 1003},
+                }
+            )
+            await finish(spawn_id, name, nested)
+
+        async def finish(spawn_id, name, nested):
+            await send(
+                schema.ToolCallProgress(
+                    session_update="tool_call_update",
+                    tool_call_id=spawn_id,
+                    status="completed",
+                    content=[
+                        schema.ContentToolCallContent(
+                            type="content", content=text(f"<task_result>{name}</task_result>")
+                        )
+                    ],
+                )
+            )
+            self.saved.append(
+                {
+                    "role": "tool",
+                    "data": {
+                        "role": "tool",
+                        "content": f"<task_result>{name}</task_result>",
+                        "toolUsage": {
+                            "signature": {
+                                "id": spawn_id,
+                                "name": "spawn_subagent",
+                                "arguments": {"name": name},
+                                "isError": False,
+                            }
+                        },
+                        "_meta": {
+                            "subagentId": f"task-{spawn_id}",
+                            "agentType": name,
+                            "durationMs": 1200,
+                            "loopExitReason": "stop",
+                            "spend": {"cost": 0.02},
+                        },
+                        "messages": nested,
+                    },
+                }
+            )
+
+        await asyncio.gather(*(run(*spawn) for spawn in spawns))
+        self.save_request()
+
     async def prompt(self, session_id, prompt, **kwargs):
         command = prompt[0].text
 
@@ -208,6 +359,8 @@ class FakeBob:
                 )
                 if not result.get("isError"):
                     break
+        elif command.startswith("subagents:"):
+            await self.subagents(session_id, send, command.removeprefix("subagents:").split(","))
         elif command == "touch":
             (Path(self.cwd) / "made.txt").write_text("made by the agent")
             await say("touched")

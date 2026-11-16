@@ -235,6 +235,17 @@ options = BobAgentOptions(
 
 A subagent can also set `allow_tools`, `deny_tools` (lists of Bob tool names) and `model_tier`.
 
+### Seeing a subagent's work
+
+Bob does not stream a subagent's work over ACP. The SDK reports it from two other sources, as the same message types as the agent's own work. A subagent's `AssistantMessage` and `ToolResultMessage` have `subagent` set to a `SubagentRef`: the `spawn_subagent` call that started it (`tool_use_id`), its `name`, and when Bob recorded the message (`at`).
+
+| When | What the SDK reports |
+|---|---|
+| While the subagent runs | Its tool calls and successful results, from Bob's hook events. Needs hooks (`hooks={}` is enough). |
+| At the end of the turn, before the `ResultMessage` | From Bob's task export, everything not reported yet: its text, failed results, and calls that could not be tied to a subagent. Then one `SubagentResultMessage` per subagent, with its usage. |
+
+Each call and result is reported once. Bob's hook events do not say which subagent made a call. While several subagents run at the same time, the SDK reports a call only when it knows whose it is, so the work of parallel subagents can wait for the end of the turn. A subagent's tool call can need approval: `ToolPermissionContext.subagent` then names the subagent, as far as it is known. The commands Bob runs can reach the SDK's hook server too, so a command can add a tool call or result that looks like a subagent's while a subagent runs. Treat this record as a log of what the session did, not as proof.
+
 ## Skills
 
 A skill is a folder with a `SKILL.md` file. Pass skill folders to make them available for the session, in addition to the skills that Bob already has.
@@ -359,7 +370,7 @@ Every `ResultMessage` reports what the turn used:
 
 | Field | Meaning |
 |---|---|
-| `num_turns` | Model requests in this turn |
+| `num_turns` | Model requests in this turn, including those of subagents |
 | `cost` | Cost of this turn, in Bobcoins |
 | `total_cost` | Cost of the session so far, including subagents |
 | `usage` | Bob's raw cost record, for example `contextTokens` |
