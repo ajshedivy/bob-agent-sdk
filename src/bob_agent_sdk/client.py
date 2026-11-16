@@ -29,6 +29,7 @@ from ._hooks import TOKEN_ENV, URL_ENV, HookDispatcher, scope_guard
 from ._http import LoopbackServer
 from ._messages import MessageAssembler, to_dict, tool_use_block
 from ._output import BOB_TOOL_NAME, SERVER_KEY, OutputCollector
+from ._subagents import SubagentTracker
 from ._usage import UsageSnapshot, parse_export
 from ._version import __version__
 from ._workspace import GLOBAL_SETTINGS, WorkspaceFiles
@@ -56,6 +57,8 @@ _LINE_LIMIT = 64 * 1024 * 1024
 _BUILT_IN_SUBAGENTS = ("general", "explore")
 # How often the SDK reminds the model to report its typed output.
 _OUTPUT_REMINDERS = 2
+# Seconds to wait for Bob's task export after a turn failed, for its subagents' work.
+_EXPORT_AFTER_ERROR_SECONDS = 5.0
 # Set to 1 to use Bob's saved SSO login instead of an API key.
 USE_SSO_ENV = "BOB_USE_SSO"
 _END = object()
@@ -101,6 +104,8 @@ class BobSDKClient:
         self._limit_hit: str | None = None
         self._limit_task: asyncio.Task[None] | None = None
         self._unchecked_tool_call: str | None = None
+        # Bob sends no ACP updates for its subagents. See _subagents.py.
+        self._subagents = SubagentTracker(self._queue.put_nowait)
 
     async def __aenter__(self) -> BobSDKClient:
         await self.connect()
@@ -176,7 +181,15 @@ class BobSDKClient:
             if hooks is not None:
                 dispatcher = HookDispatcher(hooks, self._on_hook_event, self._queue.put_nowait)
                 server = await self._loopback_server()
-                server.route("/hook", dispatcher.handle)
+
+                async def hook(payload: Any) -> tuple[str, dict[str, Any] | None]:
+                    try:
+                        return await dispatcher.handle(payload)
+                    finally:
+                        if isinstance(payload, dict):
+                            self._subagents.on_hook_done(payload)
+
+                server.route("/hook", hook)
                 env[URL_ENV] = server.url("/hook")
                 env[TOKEN_ENV] = server.token
 
@@ -312,6 +325,7 @@ class BobSDKClient:
         """Stop Bob. The session is saved and can be continued with `resume`."""
         self._closing = True
         self._conn = None
+        self._subagents.reset()
         # Closes the connection, stops the Bob process and stops the tool servers.
         await self._stack.aclose()
         tasks = [
@@ -468,7 +482,8 @@ class BobSDKClient:
                     reminders += 1
                     blocks = [schema.TextContentBlock(type="text", text=reminder)]
             usage: dict[str, Any] = {}
-            if snapshot := await self._usage():
+            export = await self._export()
+            if snapshot := self._snapshot(export):
                 usage = {
                     "num_turns": snapshot.model_requests - self._requests_before_turn,
                     "cost": round(snapshot.total_cost - self._cost_before_turn, 6),
@@ -481,25 +496,49 @@ class BobSDKClient:
             if self._output is not None and self._output.has_value:
                 usage["structured_output"] = self._output.value
             duration_ms = int((time.monotonic() - started) * 1000)
-            messages = self._assembler.finish(stop_reason, duration_ms, **usage)
+            # The agent's last text, then its subagents' work that only the export has.
+            messages = self._assembler.flush()
+            messages += self._subagents.finish(export, self.session_id)
+            messages += self._assembler.finish(stop_reason, duration_ms, **usage)
         except ConnectionError:
+            self._subagents.reset()
             return  # Bob exited. _watch_exit reports it.
         except Exception as exc:
             # Nothing awaits this task, so the reader is the only place to report to.
-            self._queue.put_nowait(await self._translate(exc))
+            error = await self._translate(exc)
+            for message in await self._subagents_after_error():
+                self._queue.put_nowait(message)
+            self._queue.put_nowait(error)
             return
         for message in messages:
             self._queue.put_nowait(message)
 
     async def _usage(self) -> UsageSnapshot | None:
         """Read the session's cost and request count from Bob's task export."""
+        return self._snapshot(await self._export())
+
+    async def _export(self) -> Any:
+        """Bob's task export of the session, or None."""
         if not self._usage_supported or self._conn is None or self.session_id is None:
             return None
         try:
-            export = await self._conn.ext_method("bob/task/export", {"sessionId": self.session_id})
+            return await self._conn.ext_method("bob/task/export", {"sessionId": self.session_id})
         except acp.RequestError:
             return None  # Bob has not saved the task yet.
+
+    def _snapshot(self, export: Any) -> UsageSnapshot | None:
+        if export is None or self.session_id is None:
+            return None
         return parse_export(export, self.session_id)
+
+    async def _subagents_after_error(self) -> list[Message]:
+        """After a failed turn, the work of its subagents, if Bob can still export it."""
+        try:
+            export = await asyncio.wait_for(self._export(), _EXPORT_AFTER_ERROR_SECONDS)
+            return self._subagents.finish(export, self.session_id or "")
+        except Exception:
+            self._subagents.reset()
+            return []
 
     async def _check_limits(self) -> None:
         """Stop the turn when it has reached `max_turns` or `max_cost`.
@@ -535,6 +574,13 @@ class BobSDKClient:
     def _on_update(self, update: Any) -> None:
         if self._assembler is None:
             return
+        kind = update.session_update
+        if kind == "tool_call":
+            self._subagents.on_tool_call(
+                update.tool_call_id, self._tool_names.get(update.tool_call_id), update.raw_input
+            )
+        if kind in ("tool_call", "tool_call_update") and update.status in ("completed", "failed"):
+            self._subagents.on_tool_done(update.tool_call_id)
         for message in self._assembler.feed(update):
             self._queue.put_nowait(message)
         opts = self.options
@@ -550,12 +596,14 @@ class BobSDKClient:
         # where Bob gives the tool's name.
         if payload.get("hook_event_name") == "PreToolUse" and payload.get("tool_use_id"):
             self._tool_names[payload["tool_use_id"]] = payload.get("tool_name", "")
+        self._subagents.on_hook(payload)
 
     async def _decide_permission(
         self, session_id: str, tool_call: Any, options: list[schema.PermissionOption]
     ) -> schema.RequestPermissionResponse:
         allow = False
         always = False
+        subagent = self._subagents.permission(tool_call.tool_call_id)
         if self._is_output_tool(tool_call):
             # The SDK's own tool only records the answer. It must not need approval.
             allow = True
@@ -563,7 +611,9 @@ class BobSDKClient:
             call = asyncio.ensure_future(
                 self.options.can_use_tool(
                     tool_use_block(tool_call, self._tool_names.get(tool_call.tool_call_id)),
-                    ToolPermissionContext(session_id, [to_dict(option) for option in options]),
+                    ToolPermissionContext(
+                        session_id, [to_dict(option) for option in options], subagent
+                    ),
                 )
             )
             self._permission_calls.add(call)

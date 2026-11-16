@@ -45,10 +45,34 @@ ContentBlock = TextBlock | ThinkingBlock | ToolUseBlock
 
 
 @dataclass
+class SubagentRef:
+    """The subagent that a message or a permission request comes from.
+
+    Bob does not stream a subagent's work over ACP. The SDK reports a subagent's
+    tool calls and successful results from Bob's hook events while it runs, when
+    only one subagent runs. Everything else (its text, failed results, and the
+    work of subagents that ran at the same time as another one) comes from Bob's
+    task export at the end of the turn, before the `ResultMessage`.
+    """
+
+    tool_use_id: str | None
+    """The `spawn_subagent` tool call that started the subagent. None only on a
+    permission request while several subagents run: Bob does not say which one asks."""
+    name: str | None
+    """The subagent's name. None only on a permission request while several
+    subagents with different names run."""
+    at: float | None = None
+    """When Bob recorded the message, in Unix seconds. Messages from the end of
+    the turn arrive later than this."""
+
+
+@dataclass
 class AssistantMessage:
     """Text, reasoning and tool calls from Bob."""
 
     content: list[ContentBlock]
+    subagent: SubagentRef | None = None
+    """Set when a subagent wrote the message, not the agent itself."""
 
 
 @dataclass
@@ -62,6 +86,8 @@ class ToolResultMessage:
     content: list[dict[str, Any]]
     """Raw ACP tool content. File edits appear here as `{"type": "diff", ...}`."""
     raw_output: Any = None
+    subagent: SubagentRef | None = None
+    """Set when the tool call is a subagent's, not the agent's own."""
 
     @property
     def is_error(self) -> bool:
@@ -118,7 +144,7 @@ class ResultMessage:
     is_error: bool = False
     """True when the turn did not end normally or by `interrupt()`."""
     num_turns: int | None = None
-    """Model requests that Bob made in this turn."""
+    """Model requests that Bob made in this turn, including those of its subagents."""
     cost: float | None = None
     """Cost of this turn, in Bobcoins."""
     total_cost: float | None = None
@@ -131,8 +157,36 @@ class ResultMessage:
     for: an instance of the Pydantic model, or data that matches the JSON Schema."""
 
 
+@dataclass
+class SubagentResultMessage:
+    """How one subagent of the turn ended. Sent at the end of the turn, after the
+    subagent's messages and before the `ResultMessage`."""
+
+    tool_use_id: str
+    """The `spawn_subagent` tool call that started the subagent."""
+    name: str
+    subagent_id: str | None
+    """Bob's ID of the subagent. Bob's `resume_id` takes it."""
+    stop_reason: str | None
+    """Bob's reason for the end of the subagent's loop, for example `stop`,
+    `loop_condition`, `cancelled` or `error`."""
+    is_error: bool
+    duration_ms: int | None
+    num_turns: int
+    """Model requests that the subagent made. Also in the turn's `ResultMessage.num_turns`."""
+    num_tool_calls: int
+    cost: float | None
+    """Cost of the subagent, in Bobcoins. Also counted in the turn's `ResultMessage.cost`."""
+
+
 Message = (
-    AssistantMessage | ToolResultMessage | PlanMessage | SystemMessage | StreamEvent | ResultMessage
+    AssistantMessage
+    | ToolResultMessage
+    | PlanMessage
+    | SystemMessage
+    | StreamEvent
+    | SubagentResultMessage
+    | ResultMessage
 )
 
 # ------------------------------------------------------------- permissions
@@ -143,6 +197,8 @@ class ToolPermissionContext:
     session_id: str
     options: list[dict[str, Any]]
     """The raw choices that Bob offered (`optionId`, `name`, `kind`)."""
+    subagent: SubagentRef | None = None
+    """Set when a subagent asks, not the agent itself."""
 
 
 @dataclass
