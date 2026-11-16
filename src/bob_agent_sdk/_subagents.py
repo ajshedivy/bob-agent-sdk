@@ -52,6 +52,7 @@ class _Call:
     block: ToolUseBlock
     ref: SubagentRef | None  # None while several subagents run.
     timer: asyncio.TimerHandle | None = None
+    seen: float = 0.0  # When its PreToolUse arrived: the time it is reported with.
     confirmed: bool = False  # Not the agent's own call: no ACP tool_call came.
     reported: bool = False  # Emitted, with its subagent.
 
@@ -157,7 +158,7 @@ class SubagentTracker:
                 input=tool_input if isinstance(tool_input, dict) else {},
                 name=name if isinstance(name, str) else None,
             )
-            self._calls[tool_call_id] = _Call(block, self._current())
+            self._calls[tool_call_id] = _Call(block, self._current(), seen=time.time())
         elif event == "PostToolUse":
             call = self._calls.get(tool_call_id)
             if call is None:
@@ -305,7 +306,12 @@ class SubagentTracker:
             call.ref = self._current()
         if call.ref is not None:
             call.reported = True
-            self._emit(AssistantMessage([call.block], subagent=self._stamped(call.ref)))
+            ref = call.ref
+            self._emit(
+                AssistantMessage(
+                    [call.block], subagent=SubagentRef(ref.tool_use_id, ref.name, call.seen)
+                )
+            )
 
     @staticmethod
     def _stamped(ref: SubagentRef) -> SubagentRef:
